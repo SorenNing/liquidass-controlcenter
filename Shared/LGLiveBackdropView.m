@@ -13,6 +13,9 @@
 static const void *kLGOutsetKey = &kLGOutsetKey;
 static const void *kLGRadiusKey = &kLGRadiusKey;
 static const void *kLGSpecularEnabledOverrideKey = &kLGSpecularEnabledOverrideKey;
+static const void *kLGOriginalMaterialHiddenKey = &kLGOriginalMaterialHiddenKey;
+
+static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass);
 
 static NSDictionary<NSString *, id> *sLGGlassPreferences;
 
@@ -169,6 +172,7 @@ static CGFloat LGScaleForSize(CGSize s) {
 }
 
 @interface LGLiveBackdropView ()
+- (void)lgApplyFiltersImpl;
 - (void)updateSpecular;
 - (void)applySpecularAngle:(CGFloat)angle;
 - (void)reapplyFilterForParameterReload;
@@ -560,6 +564,12 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
 }
 
 - (void)applyFilters {
+    [self lgApplyFiltersImpl];
+    if (self.lgOriginalMaterial)
+        LGSyncMaterialVisibility(self.lgOriginalMaterial, self);
+}
+
+- (void)lgApplyFiltersImpl {
     CALayer *layer = self.layer;
     Class backdropCls = NSClassFromString(@"CABackdropLayer");
     if (!backdropCls || ![layer isKindOfClass:backdropCls]) return;
@@ -658,6 +668,17 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
 
 #pragma mark - generic host injection
 
+static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass) {
+    if (!mat || !glass) return;
+    BOOL attached = [glass lgFilterAttached] && glass.superview == mat.superview;
+    NSNumber *original = objc_getAssociatedObject(mat, kLGOriginalMaterialHiddenKey);
+    // A local CAFilter object is not proof of renderer execution, but never
+    // replace a working stock material when even filter attachment failed.
+    glass.hidden = !attached || original.boolValue;
+    BOOL hidden = attached ? YES : original.boolValue;
+    if (mat.hidden != hidden) mat.hidden = hidden;
+}
+
 static CGRect LGOutsetFrame(CGRect mf, UIEdgeInsets outset) {
     return CGRectMake(mf.origin.x - outset.left,
                       mf.origin.y - outset.top,
@@ -675,7 +696,10 @@ void LGInjectGlassIntoMaterialGroupType(UIView *mat, const void *assocKey,
 
     LGLiveBackdropView *glass = objc_getAssociatedObject(mat, assocKey);
     if (!glass) {
+        objc_setAssociatedObject(mat, kLGOriginalMaterialHiddenKey, @(mat.hidden),
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         glass = [[LGLiveBackdropView alloc] initWithFrame:gf groupName:groupName filterType:filterType];
+        glass.lgOriginalMaterial = mat;
         __weak LGLiveBackdropView *weakGlass = glass;
         for (NSNumber *delay in @[ @1.5, @3.0, @5.0, @8.0, @12.0 ]) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
@@ -700,7 +724,8 @@ void LGInjectGlassIntoMaterialGroupType(UIView *mat, const void *assocKey,
     objc_setAssociatedObject(glass, kLGOutsetKey, [NSValue valueWithUIEdgeInsets:outset],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(glass, kLGRadiusKey, @(cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (!mat.hidden) mat.hidden = YES;
+    [glass applyFilters];
+    LGSyncMaterialVisibility(mat, glass);
 }
 
 static void LGSyncGlassGeometry(UIView *mat, const void *assocKey,
@@ -730,18 +755,25 @@ static void LGSyncGlassGeometry(UIView *mat, const void *assocKey,
         [glass updateSpecular];
         [glass applyFilters];
     }
-    if (!mat.hidden) mat.hidden = YES;
+    [glass applyFilters];
+    LGSyncMaterialVisibility(mat, glass);
 }
 
 void LGRemoveGlassFromMaterial(UIView *mat, const void *assocKey) {
     LGLiveBackdropView *glass = objc_getAssociatedObject(mat, assocKey);
     if (!glass) return;
+    NSNumber *original = objc_getAssociatedObject(mat, kLGOriginalMaterialHiddenKey);
     objc_setAssociatedObject(mat, assocKey, nil, OBJC_ASSOCIATION_ASSIGN);
-    mat.hidden = NO;
-
+    objc_setAssociatedObject(mat, kLGOriginalMaterialHiddenKey, nil, OBJC_ASSOCIATION_ASSIGN);
+    glass.lgOriginalMaterial = nil;
     [glass removeFromSuperview];
+    mat.hidden = original ? original.boolValue : NO;
 }
 
 BOOL LGMaterialHasGlass(UIView *mat, const void *assocKey) {
     return objc_getAssociatedObject(mat, assocKey) != nil;
+}
+
+BOOL LGOriginalMaterialWasHidden(UIView *mat) {
+    return [objc_getAssociatedObject(mat, kLGOriginalMaterialHiddenKey) boolValue];
 }

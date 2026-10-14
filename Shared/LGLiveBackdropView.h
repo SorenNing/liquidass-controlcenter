@@ -20,6 +20,8 @@ NSString *LGFilterTypeForHostPrefix(NSString *prefix);
 @property (nonatomic, copy) NSString *lgFilterType;
 
 @property (nonatomic, copy) NSNumber *lgSpecularEnabledOverride;
+// Weak link prevents a material <-> sibling glass retain cycle.
+@property (nonatomic, weak) UIView *lgOriginalMaterial;
 
 - (instancetype)initWithFrame:(CGRect)frame groupName:(NSString *)groupName;
 
@@ -43,3 +45,4 @@ void LGResyncGlassGeometry(UIView *materialView, const void *assocKey);
 void LGRemoveGlassFromMaterial(UIView *materialView, const void *assocKey);
 
 BOOL LGMaterialHasGlass(UIView *materialView, const void *assocKey);
+BOOL LGOriginalMaterialWasHidden(UIView *materialView);

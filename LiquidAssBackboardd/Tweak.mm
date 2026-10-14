@@ -1073,50 +1073,23 @@ lgClockMaskTexture(__unsafe_unretained id<MTLDevice> device) {
 static const float kCornerRadiusRatio = 28.0f / 220.0f;
 static const float kMaxBezelPx        = 34.0f;
 
-static void ensureUniforms(__unsafe_unretained id<MTLDevice> device, uint64_t w, uint64_t h) {
-    if (g_uniformsBuf) return; // buffer itself only needs allocating once
-
-    g_uniformsBuf = [device newBufferWithLength:sizeof(LGUniforms)
-                                        options:MTLResourceStorageModeShared];
-    if (!g_uniformsBuf) return;
-
-    LGUniforms *u = (LGUniforms *)g_uniformsBuf.contents;
-
-    // unused placeholder kept for uniform layout
-    u->screenResolution = simd_make_float2(750.f, 1334.f);
-    u->cardOrigin               = simd_make_float2(0.f, 0.f);
-    u->glassThickness          = 18.f;
-    u->refractionScale         = 2.6f;
-    u->refractiveIndex         = 1.85f;
-    u->wallpaperOrigin         = simd_make_float2(0.f, 0.f);
-    u->samplingTransformX      = simd_make_float2(1.f, 0.f);
-    u->samplingTransformY      = simd_make_float2(0.f, 1.f);
-    u->samplingTransformOffset = simd_make_float2(0.f, 0.f);
-    u->samplingOrientation     = 1.f;
-    u->backdropZoom            = 1.f;
-    u->shapeScale              = 1.f;
-    u->shapeOrigin             = simd_make_float2(0.f, 0.f);
-    u->shapeSize               = simd_make_float2(0.f, 0.f);
-    u->useGlyphMask            = 0.f;
-    u->dispersionStrength      = 5.0f;
-    u->fresnelGlareStrength    = 0.5f;
-    u->borderWidthPixels       = 2.0f;
-    lglog("uniforms buffer allocated (geometry refreshed per-frame)");
-}
-
-static void updateUniformsForFrame(uint64_t w, uint64_t h) {
-    if (!g_uniformsBuf) return;
-    LGUniforms *u = (LGUniforms *)g_uniformsBuf.contents;
-
+static LGUniforms lgUniformsForFrame(uint64_t w, uint64_t h) {
+    // setFragmentBytes copies this per-call snapshot. No shared mutable
+    // buffer can leak one module's geometry into another render thread.
+    LGUniforms u = {};
     float fw = (float)w, fh = (float)h;
-    float shortest = fminf(fw, fh);
-
-    u->resolution          = simd_make_float2(fw, fh);
-    u->outputResolution    = simd_make_float2(fw, fh);
-    u->wallpaperResolution = simd_make_float2(fw, fh);
-    u->lensOrigin          = simd_make_float2(0.f, 0.f);
-    u->radius              = kCornerRadiusRatio * shortest;
-    u->bezelWidth           = kMaxBezelPx;
+    u.screenResolution = simd_make_float2(fw, fh);
+    u.resolution = simd_make_float2(fw, fh);
+    u.outputResolution = u.resolution;
+    u.wallpaperResolution = u.resolution;
+    u.samplingTransformX = simd_make_float2(1.f, 0.f);
+    u.samplingTransformY = simd_make_float2(0.f, 1.f);
+    u.samplingOrientation = 1.f;
+    u.backdropZoom = 1.f;
+    u.shapeScale = 1.f;
+    u.radius = kCornerRadiusRatio * fminf(fw, fh);
+    u.bezelWidth = kMaxBezelPx;
+    return u;
 }
 
 typedef struct {
@@ -1144,6 +1117,7 @@ static_assert(kHostCount == LGHostIdentifierCount, "registry and renderer host o
 static LGHostParams g_hostParams[kHostCount];
 static uint32_t g_darkAtoms[kHostCount];
 static bool         g_hostParamsInit = false;
+static os_unfair_lock g_hostParamsLock = OS_UNFAIR_LOCK_INIT;
 static float        g_fresnelGlareStrength = 0.5f;
 static float        g_coverSheetCornerRadiusPoints = 64.0f;
 
@@ -1158,26 +1132,48 @@ static bool lgUsesDynamicRadiusRoute(int host) {
 }
 
 static const LGHostParams *lgHostParamsForAtom(uint32_t atom, bool *dark) {
-    if (dark) *dark = false;
+    static thread_local LGHostParams selected;
+    bool selectedDark = false;
+    os_unfair_lock_lock(&g_hostParamsLock);
     auto route = g_radiusRoutes.find(atom);
     if (route != g_radiusRoutes.end()) {
-        static thread_local LGHostParams routed;
-        routed = g_hostParams[route->second.host];
-        routed.radiusRatio = route->second.radiusRatio;
-        if (dark) *dark = route->second.dark;
-        return &routed;
-    }
-    auto refreshRoute = g_refreshRoutes.find(atom);
-    if (refreshRoute != g_refreshRoutes.end()) {
-        if (dark) *dark = refreshRoute->second.dark;
-        return &g_hostParams[refreshRoute->second.host];
-    }
-    if (atom) for (int i = 1; i < kHostCount; i++)
-        if (g_hostParams[i].atom == atom || g_darkAtoms[i] == atom) {
-            if (dark) *dark = g_darkAtoms[i] == atom;
-            return &g_hostParams[i];
+        selected = g_hostParams[route->second.host];
+        selected.radiusRatio = route->second.radiusRatio;
+        selectedDark = route->second.dark;
+    } else {
+        auto refreshRoute = g_refreshRoutes.find(atom);
+        if (refreshRoute != g_refreshRoutes.end()) {
+            selected = g_hostParams[refreshRoute->second.host];
+            selectedDark = refreshRoute->second.dark;
+        } else {
+            int selectedHost = 0;
+            if (atom) for (int i = 1; i < kHostCount; i++) {
+                if (g_hostParams[i].atom == atom || g_darkAtoms[i] == atom) {
+                    selectedHost = i;
+                    selectedDark = g_darkAtoms[i] == atom;
+                    break;
+                }
+            }
+            selected = g_hostParams[selectedHost];
         }
-    return &g_hostParams[0];
+    }
+    os_unfair_lock_unlock(&g_hostParamsLock);
+    if (dark) *dark = selectedDark;
+    return &selected;
+}
+
+static float lgCurrentFresnelGlareStrength(void) {
+    os_unfair_lock_lock(&g_hostParamsLock);
+    float value = g_fresnelGlareStrength;
+    os_unfair_lock_unlock(&g_hostParamsLock);
+    return value;
+}
+
+static float lgCurrentCoverSheetCornerRadius(void) {
+    os_unfair_lock_lock(&g_hostParamsLock);
+    float value = g_coverSheetCornerRadiusPoints;
+    os_unfair_lock_unlock(&g_hostParamsLock);
+    return value;
 }
 
 static NSString *lgPrefsPath(void) {
@@ -1220,6 +1216,7 @@ static bool lgDecodeTintColor(NSString *hex, simd_float4 *out) {
 }
 
 static void lgReloadHostPrefs(void) {
+    os_unfair_lock_lock(&g_hostParamsLock);
     NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:lgPrefsPath()];
     NSNumber *debugLogging = prefs[@"Debug.Logging.Enabled"];
     gLGBackboardDebugLogging = [debugLogging isKindOfClass:NSNumber.class]
@@ -1281,6 +1278,7 @@ static void lgReloadHostPrefs(void) {
           prefs ? "loaded prefs" : "defaults", kHostCount, overrides,
           g_hostParams[LGHostIdentifierControlCenter].bezelWidthPoints,
           g_hostParams[LGHostIdentifierControlCenter].refractionScale);
+    os_unfair_lock_unlock(&g_hostParamsLock);
 }
 
 static void lgPrefsReloadCallback(CFNotificationCenterRef c, void *o, CFStringRef n,
@@ -1314,8 +1312,30 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     R13TRACE("R13[%llu] ENTER ctx=%p surface=%p opacity=%.2f scale=%.2f flag=%d",
              callN, ctx, surface, opacity, scale, (int)flag);
 
+    // Retain the input before Apple's pass can rotate/reuse its surfaces.
+    id<MTLTexture> preservedSource = nil;
+    if (surface && g_sourceTextureOffset >= 0) {
+        void *input = *(void **)((uint8_t *)surface + g_sourceTextureOffset);
+        if (input) preservedSource = (__bridge id<MTLTexture>)input;
+    }
+
+    // Every subsequent custom-path failure must leave Apple's stock output.
+    // This removes an undefined-destination path; the screenshot alone cannot
+    // establish whether it caused the reported white media rectangle.
+    if (g_inLegacyRender && g_origGaussR14) {
+        g_origGaussR14(self, filter, layer, ctx, opacity, surface,
+                       0.0f, g_legacyRenderOffset, cm, shape, out);
+    } else if (g_origGaussR13) {
+        g_origGaussR13(self, filter, layer, ctx, opacity, surface,
+                       0.0f, flag, cm, shape, out);
+    } else {
+        lglog("ourCustomRender13: original Gaussian unavailable; abort custom pass");
+        return;
+    }
+    uint64_t t_afterGauss = mach_absolute_time();
+
+    if (!ctx) return;
     auto *metalCtx = (uint8_t *)ctx;
-    auto *surf     = (uint8_t *)surface;
 
     if (g_cmdBufOffset < 0) {
         lglog("ourCustomRender13: command-buffer offset unresolved, skipping");
@@ -1323,8 +1343,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     }
 
     void *rawCmdBuf  = *(void **)(metalCtx + g_cmdBufOffset);
-    void *rawOrigTex = g_sourceTextureOffset >= 0
-        ? *(void **)(surf + g_sourceTextureOffset) : nullptr;
+    void *rawOrigTex = (__bridge void *)preservedSource;
 
     if (!rawCmdBuf || !rawOrigTex) {
         lglog("ourCustomRender13: early exit, cmdBuf=%p origTex=%p", rawCmdBuf, rawOrigTex);
@@ -1345,12 +1364,8 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     ensurePipeline(device);
     if (!g_shaderLibrary) { lglog("ourCustomRender13: no shader library"); return; }
 
-    ensureUniforms(device, w, h);
-    if (!g_uniformsBuf) { lglog("ourCustomRender13: no uniforms buf"); return; }
-    updateUniformsForFrame(w, h);
-    R13TRACE("R13[%llu] pipeline+uniforms ready", callN);
-
-    LGUniforms lu = *(LGUniforms *)g_uniformsBuf.contents;
+    LGUniforms lu = lgUniformsForFrame(w, h);
+    R13TRACE("R13[%llu] pipeline+local uniforms ready", callN);
     uint32_t ftype = filter
         ? *(uint32_t *)((uint8_t *)filter + g_filterAtomOffset) : 0;
     bool darkTint = false;
@@ -1370,7 +1385,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     lu.refractiveIndex    = hp->refractiveIndex;
     lu.dispersionStrength = hp->dispersionStrength;
     lu.fresnelGlareStrength = !strcmp(hp->prefPrefix, "Clock")
-        ? g_fresnelGlareStrength : 0.0f;
+        ? lgCurrentFresnelGlareStrength() : 0.0f;
     lu.tintColor          = darkTint ? simd_make_float4(hp->darkTintR, hp->darkTintG, hp->darkTintB, hp->darkTintStrength)
                                   : simd_make_float4(hp->tintR, hp->tintG, hp->tintB, hp->tintStrength);
 
@@ -1447,7 +1462,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     } else if (!strcmp(hp->prefPrefix, "CoverSheet")) {
 
         lu.useGlyphMask = -1.f;
-        float coverSheetCornerRadiusPoints = g_coverSheetCornerRadiusPoints;
+        float coverSheetCornerRadiusPoints = lgCurrentCoverSheetCornerRadius();
         lu.radius = coverSheetCornerRadiusPoints * 2.0f;
         LGCoverSheetSharedState state = {};
         bool coverStateValid = LGCoverSheetReadSharedState(&state) && state.active;
@@ -1511,16 +1526,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         }
     }
 
-    R13TRACE("R13[%llu] before g_origGaussR13(%p)", callN, (void *)g_origGaussR13);
-    if (g_inLegacyRender && g_origGaussR14) {
-        g_origGaussR14(self, filter, layer, ctx, opacity, surface,
-                       0.0f, g_legacyRenderOffset, cm, shape, out);
-    } else if (g_origGaussR13) {
-        g_origGaussR13(self, filter, layer, ctx, opacity, surface,
-                       0.0f, flag, cm, shape, out);
-    }
-    uint64_t t_afterGauss = mach_absolute_time();
-    R13TRACE("R13[%llu] after g_origGaussR13", callN);
+    R13TRACE("R13[%llu] original Gaussian pass complete", callN);
 
     rawCmdBuf = *(void **)(metalCtx + g_cmdBufOffset);
     cmdBuf = rawCmdBuf ? (__bridge id<MTLCommandBuffer>)rawCmdBuf : nil;

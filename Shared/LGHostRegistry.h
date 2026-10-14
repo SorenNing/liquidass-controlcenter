@@ -22,7 +22,7 @@ typedef struct {
 //    host            filter                            pref             corner          bezel      thick   refr  index  blur  spec   disp   light        dark
 #define LG_HOST_REGISTRY(X) \
     X(Default,        "dylv.liquidglass.refraction",   "Default",         28.0f / 220.0f, 20.00f,    108.0f, 2.6f, 1.80f, 1.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000") \
-    X(ControlCenter,  "dylv.liquidglass.cc",           "ControlCenter",   28.0f / 220.0f, 15.50f,    120.0f, 1.8f, 1.60f, 0.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000")
+    X(ControlCenter,  "dylv.liquidglass.cc",           "ControlCenter",   28.0f / 220.0f, 11.00f,    100.0f, 1.35f, 1.60f, 0.0f, 0.35f,  0.00f, "#00000014", "#00000026")
 
 enum LGHostIdentifier {
 #define LG_HOST_ENUM(identifier, ...) LGHostIdentifier##identifier,

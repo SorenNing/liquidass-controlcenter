@@ -207,6 +207,9 @@ static void lgRouteMaterialHost(UIView *material) {
         if (glass && route.postInstall) route.postInstall(material, glass);
         return;
     }
+    // Reparented/reused materials may cease to be a card background.
+    // Leaving their old sibling glass behind corrupts expanded media views.
+    LGRemoveGlassFromMaterial(material, kGlassKey);
 }
 
 static void lgReconcileInjectionsForDisable(void) {
@@ -277,8 +280,10 @@ __attribute__((constructor)) static void lgGlassInitEnableObserver(void) {
 }
 
 - (void)setHidden:(BOOL)hidden {
+    UIView *material = (UIView *)self;
+    LGLiveBackdropView *glass = objc_getAssociatedObject(material, kGlassKey);
     if (!sLGCCRendererSafeMode && lgHostEnabled(@"ControlCenter") &&
-        LGMaterialHasGlass((UIView *)self, kGlassKey)) hidden = YES;
+        glass && [glass lgFilterAttached]) hidden = YES;
     %orig(hidden);
 }
 

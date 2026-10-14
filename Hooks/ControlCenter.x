@@ -91,6 +91,33 @@ static BOOL ccIsInsideSlider(UIView *mat) {
            hasAncestorOfClassName(mat, @"MRUContinuousSliderView");
 }
 
+static BOOL ccHasSBElasticHierarchy(UIView *view);
+
+static void ccFindOuterMaterials(UIView *view, UIView **best, CGFloat *bestArea) {
+    if (isExactClass(view, @"MTMaterialView")) {
+        if (!ccIsInsideSlider(view) && !ccHasSBElasticHierarchy(view)) {
+            CGSize size = view.bounds.size;
+            CGFloat area = size.width * size.height;
+            if (area > *bestArea) { *best = view; *bestArea = area; }
+        }
+        return;
+    }
+    for (UIView *child in view.subviews) ccFindOuterMaterials(child, best, bestArea);
+}
+
+// Select the largest outer material in the stock content subtree. Stop at
+// each material so album-art/button internals cannot receive another filter.
+static UIView *ccLargestCardMaterial(UIView *module) {
+    UIView *best = nil;
+    CGFloat bestArea = 0.0;
+    for (UIView *container in module.subviews) {
+        BOOL contentContainer = isExactClass(container, @"CCUIContentModuleContentContainer") ||
+            isExactClass(container, @"CCUIContentModuleContentContainerView");
+        if (contentContainer) ccFindOuterMaterials(container, &best, &bestArea);
+    }
+    return best;
+}
+
 static BOOL ccHasSBElasticHierarchy(UIView *view) {
     // volume hud reuses cc views so leave its elastic hierarchy alone
     UIView *candidate = view;
@@ -146,10 +173,14 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
     if (w < 30.0 || h < 30.0) return -1.0;
 
     UIView *module = ccModuleAncestor(mat);
-    if (module && ccIsModuleCandidate(module)) return ccModuleCornerRadius(module);
-    if (w > 100.0 && h < 100.0) return h * 0.5;
-    if (h > 100.0 && w < 100.0) return w * 0.5;
-    return ccPillRadius(mat);
+    if (!module || ccLargestCardMaterial(module) != mat) return -1.0;
+    if (ccIsModuleCandidate(module)) return ccModuleCornerRadius(module);
+
+    // Expanded tiles such as Now Playing are wide cards, not pill shapes.
+    // Keep the system radius when present, otherwise use a conservative card radius.
+    CGFloat inheritedRadius = mat.layer.cornerRadius;
+    if (inheritedRadius > 0.0) return fmin(inheritedRadius, fmin(w, h) * 0.5);
+    return fmin(38.0, fmin(w, h) * 0.16);
 }
 
 #pragma mark - fullscreen backdrop styling
@@ -169,7 +200,7 @@ static NSHashTable<UIView *> *ccOverlayRoots(void) {
 }
 
 static CGFloat ccFullscreenBlurRadius(void) {
-    return fmax(0.0, LG_prefFloat(@"ControlCenter.FullscreenBackdropBlurRadius", 8.0));
+    return fmax(0.0, LG_prefFloat(@"ControlCenter.FullscreenBackdropBlurRadius", 6.0));
 }
 
 static UIColor *ccColorFromRGBAHex(NSString *hex, NSString *fallback) {
@@ -201,7 +232,7 @@ static UIColor *ccColorFromRGBAHex(NSString *hex, NSString *fallback) {
 }
 
 static UIColor *ccFullscreenDimColor(void) {
-    NSString *fallback = @"#00000033";
+    NSString *fallback = @"#00000040";
     return ccColorFromRGBAHex(LG_prefString(@"ControlCenter.FullscreenBackdropDimColor", fallback), fallback);
 }
 

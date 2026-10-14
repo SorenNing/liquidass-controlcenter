@@ -25,5 +25,5 @@ liquidasscc_LIBRARIES = roothide substrate
 liquidasscc_LDFLAGS = -Wl,-undefined,error -Wl,-fixup_chains
 include $(THEOS_MAKE_PATH)/tweak.mk
 
-SUBPROJECTS += LiquidAssBackboardd
+SUBPROJECTS += LiquidAssBackboardd LiquidAssCCPrefs
 include $(THEOS_MAKE_PATH)/aggregate.mk

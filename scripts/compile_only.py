@@ -14,7 +14,7 @@ INCLUDE.mkdir(exist_ok=True)
 LOGOS = THEOS / 'vendor/logos/bin/logos.pl'
 sources = ['Hooks/ControlCenter.x', 'Shared/LGGlassKit.x',
  'Shared/LGLiveBackdropView.m', 'Shared/LGSharedSupport.m', 'Shared/LGNativeBlurView.m',
- 'LiquidAssBackboardd/Tweak.mm', 'LiquidAssBackboardd/LGSymbolResolver.mm']
+ 'LiquidAssBackboardd/Tweak.mm', 'LiquidAssBackboardd/LGSymbolResolver.mm', 'LiquidAssCCPrefs/LGCCRootListController.m']
 records = []
 for arch in ['arm64', 'arm64e']:
  directory = OUT / arch

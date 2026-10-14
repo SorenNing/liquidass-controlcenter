@@ -56,6 +56,9 @@ jobs:
           test -f audit/Library/MobileSubstrate/DynamicLibraries/LiquidAssCCBackboardd.dylib
           test -f audit/Library/MobileSubstrate/DynamicLibraries/LiquidAssCCBackboardd.plist
           test -f audit/Library/PreferenceLoader/Preferences/liquidasscc.plist
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/LiquidAssCCPrefs
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/Info.plist
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/Resources/Root.plist
           python3 scripts/audit_package.py "$deb" audit-python
 
       - name: Upload quarantined artifact
