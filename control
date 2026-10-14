@@ -1,0 +1,11 @@
+Package: com.minis.liquidasscc
+Name: Liquid (Gl)ass — Control Center Extract
+Version: 0.1.0-extract
+Architecture: iphoneos-arm64e
+Replaces: com.minis.liquidglasscc
+Conflicts: com.minis.liquidglasscc
+Description: Extracted Control Center host and original LiquidAss renderer.
+Maintainer: Minis
+Author: winaviation LiquidAss contributors
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000), firmware (>= 14.0), firmware (<< 26.0), preferenceloader
