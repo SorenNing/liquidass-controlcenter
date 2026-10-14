@@ -1,0 +1,66 @@
+name: build-extracted-control-center
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  roothide-package:
+    runs-on: macos-latest
+    env:
+      THEOS_TARGET: iphone:clang:16.5:14.0
+      THEOS_PACKAGE_SCHEME: roothide
+    steps:
+      - name: Checkout extraction
+        uses: actions/checkout@v4
+
+      - name: Checkout roothide Theos
+        uses: actions/checkout@v4
+        with:
+          repository: roothide/theos
+          ref: cfba89a53a05b4a1b822121158acc3669c20602f
+          path: theos
+          submodules: recursive
+
+      - name: Download iPhoneOS 16.5 SDK
+        run: |
+          curl -L --fail -o sdk.tar.xz https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz
+          echo '5e0fd3f01266cce4ce012d4a99b38eb56578fca40d09edc81cd83dee958202fb  sdk.tar.xz' | shasum -a 256 -c -
+          mkdir -p theos/sdks
+          tar -xJf sdk.tar.xz -C theos/sdks
+          rm sdk.tar.xz
+
+      - name: Install tools
+        run: brew install ldid make dpkg
+
+      - name: Build roothide package
+        run: |
+          export THEOS="$GITHUB_WORKSPACE/theos"
+          export PATH="$(brew --prefix make)/libexec/gnubin:$PATH"
+          make clean
+          make package ARCHS="arm64 arm64e" TARGET="$THEOS_TARGET" \
+            FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
+
+      - name: Static package gate
+        run: |
+          set -euo pipefail
+          deb=$(ls packages/*.deb)
+          dpkg-deb -I "$deb"
+          dpkg-deb -c "$deb"
+          test "$(dpkg-deb -f "$deb" Architecture)" = iphoneos-arm64e
+          mkdir -p audit
+          dpkg-deb -x "$deb" audit
+          test -f audit/Library/MobileSubstrate/DynamicLibraries/liquidasscc.dylib
+          test -f audit/Library/MobileSubstrate/DynamicLibraries/liquidasscc.plist
+          test -f audit/Library/MobileSubstrate/DynamicLibraries/LiquidAssCCBackboardd.dylib
+          test -f audit/Library/MobileSubstrate/DynamicLibraries/LiquidAssCCBackboardd.plist
+          test -f audit/Library/PreferenceLoader/Preferences/liquidasscc.plist
+          python3 scripts/audit_package.py "$deb" audit-python
+
+      - name: Upload quarantined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidasscc-roothide-UNVERIFIED
+          path: packages/*.deb
+          if-no-files-found: error
