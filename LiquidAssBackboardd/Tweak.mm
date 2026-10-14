@@ -1538,7 +1538,9 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         ? *(void **)(destSurf + g_destinationTextureOffset) : nullptr;
     id<MTLTexture> destTex =
         rawDestTex ? (__bridge id<MTLTexture>)rawDestTex : nil;
-    if (destTex && (destTex == origTex || destTex.rootResource == origTex.rootResource)) {
+    id<MTLTexture> sourceParent = origTex.parentTexture;
+    id<MTLTexture> destParent = destTex.parentTexture;
+    if (destTex && (destTex == origTex || (sourceParent && destParent && sourceParent == destParent))) {
         lglog("ourCustomRender13: source/destination texture alias; kept stock pass");
         return;
     }
