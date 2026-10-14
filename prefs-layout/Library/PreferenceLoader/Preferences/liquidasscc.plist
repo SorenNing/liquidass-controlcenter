@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>entry</key><dict>
+    <key>cell</key><string>PSLinkCell</string>
+    <key>label</key><string>LiquidAss Control Center Extract</string>
+    <key>detail</key><string>PLCustomListController</string>
+    <key>isController</key><false/>
+  </dict>
+  <key>items</key><array>
+    <dict><key>cell</key><string>PSGroupCell</string><key>label</key><string>Control Center Glass</string></dict>
+    <dict><key>cell</key><string>PSSwitchCell</string><key>defaults</key><string>com.minis.liquidasscc</string><key>key</key><string>Global.Enabled</string><key>default</key><false/><key>label</key><string>Enable</string><key>PostNotification</key><string>com.minis.liquidasscc/Reload</string></dict>
+    <dict><key>cell</key><string>PSSwitchCell</string><key>defaults</key><string>com.minis.liquidasscc</string><key>key</key><string>ControlCenter.Enabled</string><key>default</key><false/><key>label</key><string>Control Center Renderer</string><key>PostNotification</key><string>com.minis.liquidasscc/Reload</string></dict>
+    <dict><key>cell</key><string>PSSliderCell</string><key>defaults</key><string>com.minis.liquidasscc</string><key>key</key><string>ControlCenter.FullscreenBackdropBlurRadius</string><key>default</key><real>8</real><key>min</key><real>0</real><key>max</key><real>50</real><key>showValue</key><true/><key>label</key><string>Backdrop Blur</string><key>PostNotification</key><string>com.minis.liquidasscc/Reload</string></dict>
+  </array>
+</dict>
+</plist>
