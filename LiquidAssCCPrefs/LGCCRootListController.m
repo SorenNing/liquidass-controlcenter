@@ -18,6 +18,10 @@
     return _specifiers;
 }
 
+- (void)restoreRecommendedDefaults {
+    [self restoreRecommendedDefaults:nil];
+}
+
 - (void)restoreRecommendedDefaults:(PSSpecifier *)specifier {
     (void)specifier;
     UIAlertController *confirmation = [UIAlertController

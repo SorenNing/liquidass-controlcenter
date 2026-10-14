@@ -1350,8 +1350,8 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         return;
     }
 
-    __unsafe_unretained id<MTLCommandBuffer> cmdBuf  = (__bridge id<MTLCommandBuffer>)rawCmdBuf;
-    __unsafe_unretained id<MTLTexture>       origTex = (__bridge id<MTLTexture>)rawOrigTex;
+    id<MTLCommandBuffer> cmdBuf = (__bridge id<MTLCommandBuffer>)rawCmdBuf;
+    id<MTLTexture> origTex = preservedSource;
 
     __unsafe_unretained id<MTLDevice> device = origTex.device;
     if (!device) { lglog("ourCustomRender13: origTex has no device, skip"); return; }
@@ -1536,8 +1536,12 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     bool plausibleDestSurf = (uintptr_t)destSurf >= 0x10000u;
     void *rawDestTex = (plausibleDestSurf && g_destinationTextureOffset >= 0)
         ? *(void **)(destSurf + g_destinationTextureOffset) : nullptr;
-    __unsafe_unretained id<MTLTexture> destTex =
+    id<MTLTexture> destTex =
         rawDestTex ? (__bridge id<MTLTexture>)rawDestTex : nil;
+    if (destTex && (destTex == origTex || destTex.rootResource == origTex.rootResource)) {
+        lglog("ourCustomRender13: source/destination texture alias; kept stock pass");
+        return;
+    }
 
     auto compatibleDimension = [](uint64_t destination, uint64_t source) {
         return destination >= source
