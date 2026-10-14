@@ -58,8 +58,9 @@ static void ccProfileRecord(CCProfileBucket bucket, CFTimeInterval started) {
 }
 
 static UIView *ccModuleAncestor(UIView *v) {
+    Class moduleClass = NSClassFromString(@"CCUIContentModuleContainerView");
     for (UIView *a = v.superview; a; a = a.superview)
-        if (isExactClass(a, @"CCUIContentModuleContainerView")) return a;
+        if (moduleClass && [a isKindOfClass:moduleClass]) return a;
     return nil;
 }
 
@@ -93,29 +94,12 @@ static BOOL ccIsInsideSlider(UIView *mat) {
 
 static BOOL ccHasSBElasticHierarchy(UIView *view);
 
-static void ccFindOuterMaterials(UIView *view, UIView **best, CGFloat *bestArea) {
-    if (isExactClass(view, @"MTMaterialView")) {
-        if (!ccIsInsideSlider(view) && !ccHasSBElasticHierarchy(view)) {
-            CGSize size = view.bounds.size;
-            CGFloat area = size.width * size.height;
-            if (area > *bestArea) { *best = view; *bestArea = area; }
-        }
-        return;
-    }
-    for (UIView *child in view.subviews) ccFindOuterMaterials(child, best, bestArea);
-}
-
-// Select the largest outer material in the stock content subtree. Stop at
-// each material so album-art/button internals cannot receive another filter.
-static UIView *ccLargestCardMaterial(UIView *module) {
-    UIView *best = nil;
-    CGFloat bestArea = 0.0;
-    for (UIView *container in module.subviews) {
-        BOOL contentContainer = isExactClass(container, @"CCUIContentModuleContentContainer") ||
-            isExactClass(container, @"CCUIContentModuleContentContainerView");
-        if (contentContainer) ccFindOuterMaterials(container, &best, &bestArea);
-    }
-    return best;
+// Render every outer material in a module, but never stack a second glass
+// surface inside an existing material (album art / nested media plates).
+static BOOL ccHasMaterialAncestor(UIView *material) {
+    for (UIView *ancestor = material.superview; ancestor; ancestor = ancestor.superview)
+        if (isExactClass(ancestor, @"MTMaterialView")) return YES;
+    return NO;
 }
 
 static BOOL ccHasSBElasticHierarchy(UIView *view) {
@@ -173,7 +157,7 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
     if (w < 30.0 || h < 30.0) return -1.0;
 
     UIView *module = ccModuleAncestor(mat);
-    if (!module || ccLargestCardMaterial(module) != mat) return -1.0;
+    if (!module || ccHasMaterialAncestor(mat)) return -1.0;
     if (ccIsModuleCandidate(module)) return ccModuleCornerRadius(module);
 
     // Expanded tiles such as Now Playing are wide cards, not pill shapes.
