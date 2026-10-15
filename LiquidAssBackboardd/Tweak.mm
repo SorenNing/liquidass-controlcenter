@@ -299,9 +299,11 @@ typedef struct {
     float       fresnelGlareStrength;
     float       borderWidthPixels;
     float       lightBackdropProtection;
+    float       normalizedOutputScale;
     simd_float4 tintColor;
 } LGUniforms;
 static_assert(offsetof(LGUniforms, lightBackdropProtection) == 152, "protection uniform offset changed");
+static_assert(offsetof(LGUniforms, normalizedOutputScale) == 156, "scale uniform offset changed");
 static_assert(offsetof(LGUniforms, tintColor) == 160, "tint uniform offset changed");
 static_assert(sizeof(LGUniforms) == 176, "Metal/C++ uniform layout changed");
 
@@ -459,6 +461,7 @@ struct Uniforms {
     float  fresnelGlareStrength;
     float  borderWidthPixels;
     float  lightBackdropProtection;
+    float  normalizedOutputScale;
     float4 tintColor;
 };
 
@@ -598,13 +601,13 @@ float2 backdropSampleUV(float2 capturePx,
 
 float4 liquidGlassPixel(texture2d<float, access::sample> src,
                         texture2d<float, access::sample> glyphMask,
-                        constant Uniforms &u, uint2 gid, uint2 dimensions)
+                        constant Uniforms &u, float2 sourcePosition, uint2 dimensions)
 {
     const uint W = dimensions.x, H = dimensions.y;
 
     constexpr sampler s(filter::linear, address::clamp_to_edge);
 
-    float2 localUV = (float2(gid) + 0.5) / float2(W, H);
+    float2 localUV = sourcePosition / float2(W, H);
     bool isCoverSheet = u.useGlyphMask < -0.5;
     bool isKeyboard = u.useGlyphMask > 0.0 && u.useGlyphMask < 0.5;
     float2 captureUV = localUV;
@@ -915,12 +918,12 @@ fragment float4 liquidGlassFragment(
     constant Uniforms &u [[buffer(0)]])
 {
     uint2 dimensions(src.get_width(), src.get_height());
-    float2 sourcePosition =
-        in.position.xy - (u.outputResolution - u.resolution) * 0.5;
+    float2 sourcePosition = u.normalizedOutputScale > 0.5
+        ? in.position.xy * u.resolution / u.outputResolution
+        : in.position.xy - (u.outputResolution - u.resolution) * 0.5;
     if (any(sourcePosition < float2(0.0)) ||
         any(sourcePosition >= u.resolution)) return float4(0.0);
-    uint2 gid = min(uint2(sourcePosition), dimensions - 1);
-    return liquidGlassPixel(src, glyphMask, u, gid, dimensions);
+    return liquidGlassPixel(src, glyphMask, u, sourcePosition, dimensions);
 }
 
 )MSL";
@@ -1580,10 +1583,17 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
             ? destination - source <= 64
             : source - destination <= 8;
     };
-    bool compatibleDimensions =
-        destTex &&
-        compatibleDimension(destTex.width, w) &&
-        compatibleDimension(destTex.height, h);
+    // Preserve the original symmetric-padding route. Add only the near-
+    // uniform downscale observed in CC transitions; unknown geometry falls back.
+    double sx = (double)destTex.width / (double)w;
+    double sy = (double)destTex.height / (double)h;
+    bool normalizedScale = !strcmp(hp->prefPrefix, "ControlCenter") &&
+        destTex.width > 0 && destTex.height > 0 && sx >= 0.85 && sy >= 0.85 &&
+        sx <= 1.0 && sy <= 1.0 && (sx < 1.0 || sy < 1.0) &&
+        fabs(sx - sy) / fmax(sx, sy) <= 0.01;
+    bool compatibleDimensions = destTex &&
+        (normalizedScale || (compatibleDimension(destTex.width, w) &&
+                             compatibleDimension(destTex.height, h)));
     if (!cmdBuf || !destTex || destTex.device != device ||
         !compatibleDimensions ||
         !(destTex.usage & MTLTextureUsageRenderTarget)) {
@@ -1598,6 +1608,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     }
     lu.outputResolution =
         simd_make_float2((float)destTex.width, (float)destTex.height);
+    lu.normalizedOutputScale = normalizedScale ? 1.0f : 0.0f;
 
     os_unfair_lock_lock(&g_loggedRenderAtomsLock);
     bool firstSuccessfulAtom = g_loggedRenderAtoms.insert(ftype).second;

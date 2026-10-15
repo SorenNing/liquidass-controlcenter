@@ -1,6 +1,6 @@
 Package: com.minis.liquidasscc
 Name: Liquid (Gl)ass — 控制中心
-Version: 0.2.4-extract
+Version: 0.2.5-extract
 Architecture: iphoneos-arm64e
 Replaces: com.minis.liquidglasscc
 Conflicts: com.minis.liquidglasscc

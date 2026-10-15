@@ -45,6 +45,7 @@ typedef BOOL (^LGMaterialHostMatcher)(UIView *material);
 typedef CGFloat (^LGMaterialHostCornerRadiusProvider)(UIView *material);
 typedef void (^LGMaterialHostPostInstall)(UIView *material,
                                           LGLiveBackdropView *glass);
+void LGRefreshMaterialHost(UIView *material);
 void LGRegisterMaterialHost(NSString *prefix,
                             NSInteger priority,
                             LGMaterialHostMatcher matcher,

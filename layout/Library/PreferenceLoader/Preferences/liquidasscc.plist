@@ -4,6 +4,7 @@
 <dict>
   <key>entry</key><dict>
     <key>bundle</key><string>LiquidAssCCPrefs</string>
+    <key>icon</key><string>icon.png</string>
     <key>cell</key><string>PSLinkCell</string>
     <key>label</key><string>Liquid (Gl)ass — 控制中心</string>
     <key>detail</key><string>LGCCRootListController</string>

@@ -59,6 +59,10 @@ jobs:
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/LiquidAssCCPrefs
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/Info.plist
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/Root.plist
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon.png
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon@2x.png
+          test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon@3x.png
+          python3 scripts/test_geometry.py
           python3 scripts/audit_package.py "$deb" audit-python
 
       - name: Upload quarantined artifact

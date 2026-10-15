@@ -193,9 +193,16 @@ void LGRegisterMaterialHost(NSString *prefix,
     }];
 }
 
-static void lgRouteMaterialHost(UIView *material) {
+static void lgRouteMaterialHostImpl(UIView *material) {
     if (!material.window) {
         LGRemoveGlassFromMaterial(material, kGlassKey);
+        return;
+    }
+    if (CGRectIsEmpty(material.bounds) && LGMaterialHasGlass(material, kGlassKey) &&
+        lgHostEnabled(@"ControlCenter")) {
+        // The system temporarily collapses frames while reparenting an
+        // expanded module. Keep ownership; the next nonzero setter retries.
+        LGResyncGlassGeometry(material, kGlassKey);
         return;
     }
     for (LGMaterialHostRoute *route in sMaterialHostRoutes) {
@@ -210,6 +217,18 @@ static void lgRouteMaterialHost(UIView *material) {
     // Reparented/reused materials may cease to be a card background.
     // Leaving their old sibling glass behind corrupts expanded media views.
     LGRemoveGlassFromMaterial(material, kGlassKey);
+}
+
+void LGRefreshMaterialHost(UIView *material) {
+    if (!material) return;
+    static BOOL routing = NO; // UIKit routes on the main thread only.
+    if (routing) return;
+    routing = YES;
+    @try {
+        lgRouteMaterialHostImpl(material);
+    } @finally {
+        routing = NO;
+    }
 }
 
 static void lgReconcileInjectionsForDisable(void) {
@@ -271,17 +290,18 @@ __attribute__((constructor)) static void lgGlassInitEnableObserver(void) {
 
 - (void)didMoveToWindow {
     %orig;
-    lgRouteMaterialHost((UIView *)self);
+    LGRefreshMaterialHost((UIView *)self);
 }
 
 - (void)layoutSubviews {
     %orig;
-    lgRouteMaterialHost((UIView *)self);
+    LGRefreshMaterialHost((UIView *)self);
 }
 
 - (void)setHidden:(BOOL)hidden {
     UIView *material = (UIView *)self;
     LGLiveBackdropView *glass = objc_getAssociatedObject(material, kGlassKey);
+    LGRecordMaterialHiddenRequest(material, glass, hidden);
     if (!sLGCCRendererSafeMode && lgHostEnabled(@"ControlCenter") &&
         glass && [glass lgFilterAttached]) hidden = YES;
     %orig(hidden);
@@ -289,15 +309,15 @@ __attribute__((constructor)) static void lgGlassInitEnableObserver(void) {
 
 - (void)setFrame:(CGRect)frame {
     %orig(frame);
-    LGResyncGlassGeometry((UIView *)self, kGlassKey);
+    LGRefreshMaterialHost((UIView *)self);
 }
 - (void)setBounds:(CGRect)bounds {
     %orig(bounds);
-    LGResyncGlassGeometry((UIView *)self, kGlassKey);
+    LGRefreshMaterialHost((UIView *)self);
 }
 - (void)setCenter:(CGPoint)center {
     %orig(center);
-    LGResyncGlassGeometry((UIView *)self, kGlassKey);
+    LGRefreshMaterialHost((UIView *)self);
 }
 
 %end

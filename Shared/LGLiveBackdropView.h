@@ -27,6 +27,9 @@ NSString *LGFilterTypeForHostPrefix(NSString *prefix);
 
 - (instancetype)initWithFrame:(CGRect)frame groupName:(NSString *)groupName
                    filterType:(NSString *)filterType;
+- (instancetype)initWithFrame:(CGRect)frame groupName:(NSString *)groupName
+                   filterType:(NSString *)filterType initialCornerRadius:(CGFloat)radius;
+- (void)lgSetFrame:(CGRect)frame cornerRadius:(CGFloat)radius;
 @property (nonatomic, assign) CGRect lgShapeRect;
 @property (nonatomic, assign) CGFloat lgShapeCornerRadius;
 
@@ -46,3 +49,4 @@ void LGRemoveGlassFromMaterial(UIView *materialView, const void *assocKey);
 
 BOOL LGMaterialHasGlass(UIView *materialView, const void *assocKey);
 BOOL LGOriginalMaterialWasHidden(UIView *materialView);
+void LGRecordMaterialHiddenRequest(UIView *materialView, LGLiveBackdropView *glass, BOOL hidden);

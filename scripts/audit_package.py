@@ -6,8 +6,15 @@ out.mkdir(parents=True,exist_ok=True)
 def run(*a): return subprocess.check_output(a,text=True,stderr=subprocess.STDOUT)
 print(run('dpkg-deb','-f',str(p),'Package','Version','Architecture','Depends'))
 subprocess.check_call(['dpkg-deb','-x',str(p),str(out)])
-for f in sorted(out.rglob('*.dylib')):
+binaries = sorted(out.rglob('*.dylib'))
+pref_binary = out/'Library/PreferenceBundles/LiquidAssCCPrefs.bundle/LiquidAssCCPrefs'
+if pref_binary.is_file(): binaries.append(pref_binary)
+for f in binaries:
  h=run('otool','-l',str(f)); deps=run('otool','-L',str(f)); print('\n',f,'\n',deps)
+ header=run('otool','-hv',str(f))
+ if 'TWOLEVEL' not in header: raise SystemExit('missing two-level namespace: '+str(f))
+ archs=run('lipo','-archs',str(f))
+ if not {'arm64','arm64e'}.issubset(set(archs.split())): raise SystemExit('missing CPU slice: '+str(f))
  if 'LC_DYLD_CHAINED_FIXUPS' not in h: raise SystemExit('missing chained fixups: '+str(f))
  if 'LC_CODE_SIGNATURE' not in h: raise SystemExit('missing signature: '+str(f))
  if 'libSystemStub' in deps or 'TestCC' in deps: raise SystemExit('experimental dependency: '+str(f))

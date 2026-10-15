@@ -16,6 +16,7 @@ static const void *kLGSpecularEnabledOverrideKey = &kLGSpecularEnabledOverrideKe
 static const void *kLGOriginalMaterialHiddenKey = &kLGOriginalMaterialHiddenKey;
 
 static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass);
+static BOOL sLGSyncingMaterialVisibility = NO;
 
 static NSDictionary<NSString *, id> *sLGGlassPreferences;
 
@@ -352,7 +353,11 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
         _lastRadiusStep = step;
         base = [base stringByAppendingFormat:@".r%ld", (long)step];
     }
-    NSString *type = self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark
+    UIUserInterfaceStyle style = self.traitCollection.userInterfaceStyle;
+    if (LGHostIdentifierForFilterType(_lgFilterType.UTF8String) == LGHostIdentifierControlCenter &&
+        self.window.traitCollection.userInterfaceStyle != UIUserInterfaceStyleUnspecified)
+        style = self.window.traitCollection.userInterfaceStyle;
+    NSString *type = style == UIUserInterfaceStyleDark
         ? [base stringByAppendingString:@".dark"] : base;
     if (_parameterRefreshVariant) type = [type stringByAppendingString:@".refresh"];
     return type;
@@ -371,6 +376,11 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame groupName:(NSString *)groupName filterType:(NSString *)filterType {
+    return [self initWithFrame:frame groupName:groupName filterType:filterType initialCornerRadius:0.0];
+}
+
+- (instancetype)initWithFrame:(CGRect)frame groupName:(NSString *)groupName
+                   filterType:(NSString *)filterType initialCornerRadius:(CGFloat)radius {
     self = [super initWithFrame:frame];
     if (!self) return nil;
     _lastRadiusStep = -1;
@@ -391,6 +401,12 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
     self.userInteractionEnabled = NO;
     self.backgroundColor        = [UIColor clearColor];
     self.opaque                 = NO;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.layer.cornerRadius = fmax(0.0, radius);
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.layer.masksToBounds = YES;
+    [CATransaction commit];
 
     self.autoresizingMask       = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     LGEnsureFilterRefreshObserver();
@@ -399,6 +415,19 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
     [sLGMotionGlasses addObject:self];
     [self applyFilters];
     return self;
+}
+
+- (void)lgSetFrame:(CGRect)frame cornerRadius:(CGFloat)radius {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    // Never implicitly animate from the previous r0/old-size shape.
+    self.layer.cornerCurve = kCACornerCurveContinuous;
+    self.layer.masksToBounds = YES;
+    self.layer.cornerRadius = fmax(0.0, radius);
+    if (!CGRectEqualToRect(self.frame, frame)) self.frame = frame;
+    [self applyFilters];
+    [self updateSpecular];
+    [CATransaction commit];
 }
 
 - (void)dealloc {
@@ -676,7 +705,19 @@ static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass) {
     // replace a working stock material when even filter attachment failed.
     glass.hidden = !attached || original.boolValue;
     BOOL hidden = attached ? YES : original.boolValue;
-    if (mat.hidden != hidden) mat.hidden = hidden;
+    if (mat.hidden != hidden) {
+        BOOL previous = sLGSyncingMaterialVisibility;
+        sLGSyncingMaterialVisibility = YES;
+        @try { mat.hidden = hidden; }
+        @finally { sLGSyncingMaterialVisibility = previous; }
+    }
+}
+
+void LGRecordMaterialHiddenRequest(UIView *mat, LGLiveBackdropView *glass, BOOL hidden) {
+    if (sLGSyncingMaterialVisibility || !glass) return;
+    objc_setAssociatedObject(mat, kLGOriginalMaterialHiddenKey, @(hidden),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    glass.hidden = hidden || ![glass lgFilterAttached];
 }
 
 static CGRect LGOutsetFrame(CGRect mf, UIEdgeInsets outset) {
@@ -693,13 +734,16 @@ void LGInjectGlassIntoMaterialGroupType(UIView *mat, const void *assocKey,
     if (!parent) return;
 
     CGRect gf = LGOutsetFrame(mat.frame, outset);
+    CGFloat radius = (cornerRadius >= 0.0) ? cornerRadius : mat.layer.cornerRadius;
 
     LGLiveBackdropView *glass = objc_getAssociatedObject(mat, assocKey);
     if (!glass) {
         objc_setAssociatedObject(mat, kLGOriginalMaterialHiddenKey, @(mat.hidden),
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        glass = [[LGLiveBackdropView alloc] initWithFrame:gf groupName:groupName filterType:filterType];
+        glass = [[LGLiveBackdropView alloc] initWithFrame:gf groupName:groupName
+            filterType:filterType initialCornerRadius:radius];
         glass.lgOriginalMaterial = mat;
+        glass.hidden = YES;
         __weak LGLiveBackdropView *weakGlass = glass;
         for (NSNumber *delay in @[ @1.5, @3.0, @5.0, @8.0, @12.0 ]) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
@@ -711,15 +755,7 @@ void LGInjectGlassIntoMaterialGroupType(UIView *mat, const void *assocKey,
         objc_setAssociatedObject(mat, assocKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (glass.superview != parent) [parent insertSubview:glass aboveSubview:mat];
-    CGFloat radius = (cornerRadius >= 0.0) ? cornerRadius : mat.layer.cornerRadius;
-    if (!CGRectEqualToRect(glass.frame, gf))          glass.frame              = gf;
-    if (fabs(glass.layer.cornerRadius - radius) > 0.5) {
-        glass.layer.cornerRadius = radius;
-        [glass updateSpecular];
-        [glass applyFilters];
-    }
-    glass.layer.cornerCurve   = kCACornerCurveContinuous;
-    glass.layer.masksToBounds = YES;
+    [glass lgSetFrame:gf cornerRadius:radius];
 
     objc_setAssociatedObject(glass, kLGOutsetKey, [NSValue valueWithUIEdgeInsets:outset],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -747,15 +783,7 @@ static void LGSyncGlassGeometry(UIView *mat, const void *assocKey,
     CGRect gf = LGOutsetFrame(mat.frame, outset);
     CGFloat radius = (cornerRadius >= 0.0) ? cornerRadius : mat.layer.cornerRadius;
 
-    if (!CGRectEqualToRect(glass.frame, gf)) {
-        glass.frame = gf;
-    }
-    if (fabs(glass.layer.cornerRadius - radius) > 0.5) {
-        glass.layer.cornerRadius = radius;
-        [glass updateSpecular];
-        [glass applyFilters];
-    }
-    [glass applyFilters];
+    [glass lgSetFrame:gf cornerRadius:radius];
     LGSyncMaterialVisibility(mat, glass);
 }
 

@@ -7,7 +7,15 @@
 
 #pragma mark - taxonomy
 
-static CGFloat sCCSmallModuleRadius = 0.0;
+// Mark only the Control Center overlay root; expanded panels may be moved
+// out of CCUIContentModuleContainerView during a long-press transition.
+static void *kCCOverlayScopeKey = &kCCOverlayScopeKey;
+
+static BOOL ccInsideOverlay(UIView *view) {
+    for (UIView *a = view; a; a = a.superview)
+        if ([objc_getAssociatedObject(a, kCCOverlayScopeKey) boolValue]) return YES;
+    return NO;
+}
 
 typedef NS_ENUM(NSUInteger, CCProfileBucket) {
     CCProfileFullscreen,
@@ -74,9 +82,10 @@ static BOOL ccIsModuleCandidate(UIView *module) {
 static CGFloat ccModuleCornerRadius(UIView *module) {
     CGFloat h = CGRectGetHeight(module.bounds);
     if (h <= 0.0) return 0.0;
-    CGFloat r = h * 0.5;
-    if (h < 100.0) { sCCSmallModuleRadius = r; return r; }
-    return sCCSmallModuleRadius > 0.0 ? sCCSmallModuleRadius : r;
+    // Ordinary toggles are circles. Larger cards use a deterministic radius
+    // from their own size, not whichever small toggle happened to lay out first.
+    if (h < 100.0) return h * 0.5;
+    return fmin(38.5, fmin(module.bounds.size.width, h) * 0.25);
 }
 
 static BOOL ccIsSliderView(UIView *view) {
@@ -137,10 +146,11 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
     // MediaControlsMaterialView plus the real 170x170 card material. The
     // inner strip masks the card's refraction, so keep the outer card only.
     if (hasAncestorOfClassName(mat, @"MediaControlsMaterialView")) return -1.0;
-    BOOL inModule = hasAncestorOfClassName(mat, @"CCUIContentModuleContainerView");
+    BOOL inModule = ccModuleAncestor(mat) != nil;
+    BOOL inOverlay = ccInsideOverlay(mat);
 
     if (ccIsInsideSlider(mat)) {
-        if (!inModule && !LGMaterialHasGlass(mat, kGlassKey)) return -1.0;
+        if (!inModule && !inOverlay && !LGMaterialHasGlass(mat, kGlassKey)) return -1.0;
         if (ccIsSliderFillMaterial(mat)) return -1.0;
         UIView *slider = ccSliderAncestor(mat);
         if (!slider) return -1.0;
@@ -150,11 +160,25 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
     }
 
     if (!inModule) {
+        // Fresh expanded materials are not associated yet. Do not require
+        // an existing glass to decide whether a first installation is allowed.
+        if (!inOverlay || ccHasMaterialAncestor(mat)) return -1.0;
         UIView *parent = mat.superview;
-        BOOL expanded = (isExactClass(parent, @"CCUIContentModuleContentContainer") ||
-                         isExactClass(parent, @"CCUIContentModuleContentContainerView")) &&
-                        LGMaterialHasGlass(mat, kGlassKey);
-        return expanded ? mat.layer.cornerRadius : -1.0;
+        CGFloat w = CGRectGetWidth(mat.bounds), h = CGRectGetHeight(mat.bounds);
+        // Never decorate the fullscreen dim/backdrop or small glyph/button fills.
+        if ([objc_getAssociatedObject(parent, kCCOverlayScopeKey) boolValue]) return -1.0;
+        NSString *name = NSStringFromClass(parent.class);
+        BOOL panel = [name isEqualToString:@"CCUIContentModuleContentContainer"] ||
+            [name isEqualToString:@"CCUIContentModuleContentContainerView"] ||
+            [name isEqualToString:@"_FCUIActivityControlContentView"] ||
+            [name containsString:@"CCUIBluetooth"] ||
+            [name containsString:@"CCUIWiFi"] ||
+            [name containsString:@"CCUIConnectivity"];
+        if (!panel || w < 100.0 || h < 30.0) return -1.0;
+        CGFloat nativeRadius = mat.layer.cornerRadius;
+        if (nativeRadius <= 0.0) nativeRadius = parent.layer.cornerRadius;
+        return nativeRadius > 0.0 ? fmin(nativeRadius, fmin(w, h) * 0.5)
+            : fmin(38.5, fmin(w, h) * 0.5);
     }
 
     CGFloat w = CGRectGetWidth(mat.bounds), h = CGRectGetHeight(mat.bounds);
@@ -427,6 +451,7 @@ static UIView *ccFullscreenDimView(UIView *backdropMaterial, BOOL create) {
 static void ccApplyFullscreenBackdropStyleImpl(UIView *overlayRoot) {
     if (!overlayRoot) return;
     [ccOverlayRoots() addObject:overlayRoot];
+    objc_setAssociatedObject(overlayRoot, kCCOverlayScopeKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     BOOL enabled = lgHostEnabled(@"ControlCenter");
     CGFloat radius = ccFullscreenBlurRadius();
@@ -694,9 +719,12 @@ static void lgRound(UIView *v, CGFloat r) {
     ccRememberOriginalRoundState(v);
     objc_setAssociatedObject(v.layer, kCCRoundDesiredRadiusKey, @(r),
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     if (fabs(v.layer.cornerRadius - r) > 0.5) v.layer.cornerRadius = r;
     v.layer.cornerCurve   = kCACornerCurveContinuous;
     v.layer.masksToBounds = YES;
+    [CATransaction commit];
 }
 
 static void ccApplyOrRestoreRound(UIView *view, CGFloat radius, BOOL eligible) {
@@ -772,11 +800,11 @@ static void ccRoundMaterialsInSubtree(UIView *view, CGFloat radius,
     if (depth > 6) return;
     for (UIView *sub in view.subviews) {
         if (isExactClass(sub, @"MTMaterialView")) {
-            ccApplyOrRestoreRound(sub, radius, eligible);
-            CGFloat glassRadius = ccGlassRadiusForMaterial(sub);
-            if (glassRadius >= 0.0 && LGMaterialHasGlass(sub, kGlassKey))
-                LGInstallRegisteredGlassInMaterial(sub, kGlassKey, @"ControlCenter",
-                                                   UIEdgeInsetsZero, glassRadius, nil);
+            // The filled part may use a private animated mask. Forcing its
+            // material radius deformed the expanded slider into a pointed lens.
+            BOOL track = eligible && !ccIsSliderFillMaterial(sub);
+            ccApplyOrRestoreRound(sub, radius, track);
+            LGRefreshMaterialHost(sub);
         } else {
             ccRoundMaterialsInSubtree(sub, radius, eligible, depth + 1);
         }
@@ -852,17 +880,21 @@ static void roundModuleContainer(UIView *module) {
     ccProfileRecord(CCProfileModuleRound, started);
 }
 
-static void ccRefreshContentContainerGlassImpl(UIView *container) {
-    for (UIView *material in container.subviews) {
-        if (!isExactClass(material, @"MTMaterialView") ||
-            !LGMaterialHasGlass(material, kGlassKey)) continue;
-        CGFloat radius = ccGlassRadiusForMaterial(material);
-        if (radius >= 0.0) {
-            ccApplyOrRestoreRound(material, radius, YES);
-            LGInstallRegisteredGlassInMaterial(material, kGlassKey, @"ControlCenter",
-                                               UIEdgeInsetsZero, radius, nil);
-        }
+static void ccRefreshMaterialTree(UIView *view, NSUInteger depth) {
+    if (!view || depth > 18 || [view isKindOfClass:LGLiveBackdropView.class]) return;
+    if (isExactClass(view, @"MTMaterialView")) {
+        LGRefreshMaterialHost(view);
+        return;
     }
+    // copy: installing a sibling glass can mutate the child list.
+    for (UIView *child in [view.subviews copy]) ccRefreshMaterialTree(child, depth + 1);
+}
+
+static void ccRefreshContentContainerGlassImpl(UIView *container) {
+    if (!container.window) return;
+    // Retry unassociated materials too. Music finishes its inner layout after
+    // the container's first pass, so updating only glass=1 missed it forever.
+    ccRefreshMaterialTree(container, 0);
 }
 
 static void ccRefreshContentContainerGlass(UIView *container) {
@@ -895,6 +927,15 @@ static void ccRefreshContentContainerGlass(UIView *container) {
 - (void)layoutSubviews {
     %orig;
     ccRefreshContentContainerGlass((UIView *)self);
+}
+%end
+
+%hook MRUControlCenterView
+- (void)layoutSubviews {
+    %orig;
+    UIView *view = (UIView *)self;
+    if (ccModuleAncestor(view) || ccInsideOverlay(view))
+        ccRefreshMaterialTree(view, 0);
 }
 %end
 
@@ -949,6 +990,7 @@ static void ccRefreshContentContainerGlass(UIView *container) {
     %orig;
     UIView *root = ((UIViewController *)self).view;
     ccApplyFullscreenBackdropStyle(root);
+    ccRefreshMaterialTree(root, 0);
     ccProfileReport(YES);
 }
 
