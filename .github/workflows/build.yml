@@ -62,6 +62,8 @@ jobs:
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon.png
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon@2x.png
           test -f audit/Library/PreferenceBundles/LiquidAssCCPrefs.bundle/icon@3x.png
+          cc scripts/test_geometry_native.c -std=c11 -Wall -Wextra -Werror -lm -o /tmp/lgcc-geometry-test
+          /tmp/lgcc-geometry-test
           python3 scripts/test_geometry.py
           python3 scripts/audit_package.py "$deb" audit-python
 

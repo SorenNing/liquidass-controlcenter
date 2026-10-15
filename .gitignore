@@ -1,0 +1,5 @@
+.theos/
+packages/
+validation/
+artifacts/
+*.validation.m

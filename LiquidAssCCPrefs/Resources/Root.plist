@@ -367,6 +367,27 @@
 			<string>com.minis.liquidasscc/Reload</string>
 		</dict>
 		<dict>
+			<key>cell</key><string>PSGroupCell</string>
+			<key>label</key><string>过渡问题定位（默认关闭）</string>
+			<key>footerText</key><string>“仅原生渲染对照”临时跳过自绘，用于比较黑闪，不代表正常玻璃效果。先开启调试日志，再打开“采集25秒过渡日志”，随后复现一次长按收回；采集自动限时，重新采集需先关再开。无需重启守护进程。</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>defaults</key><string>com.minis.liquidasscc</string>
+			<key>key</key><string>Debug.Renderer.StockOnly</string>
+			<key>default</key><false/>
+			<key>label</key><string>仅原生渲染对照</string>
+			<key>PostNotification</key><string>com.minis.liquidasscc/Reload</string>
+		</dict>
+		<dict>
+			<key>cell</key><string>PSSwitchCell</string>
+			<key>defaults</key><string>com.minis.liquidasscc</string>
+			<key>key</key><string>Debug.TransitionTrace.Enabled</string>
+			<key>default</key><false/>
+			<key>label</key><string>采集25秒过渡日志</string>
+			<key>PostNotification</key><string>com.minis.liquidasscc/Reload</string>
+		</dict>
+		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>

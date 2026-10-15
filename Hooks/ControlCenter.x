@@ -3,6 +3,7 @@
 #import "../Shared/LGLiveBackdropView.h"
 #import "../Shared/LGGlassKit.h"
 #import "../Shared/LGSharedSupport.h"
+#import "../Shared/LGGeometryPolicy.h"
 #import <objc/runtime.h>
 
 #pragma mark - taxonomy
@@ -156,7 +157,10 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
         if (!slider) return -1.0;
         if (CGRectGetWidth(slider.bounds) < 30.0 ||
             CGRectGetHeight(slider.bounds) < 30.0) return -1.0;
-        return ccPillRadius(slider);
+        // Match the native track/fill geometry. The real expanded track is
+        // radius 42 (not width/2 = 75); the collapsed one is 21 (not 38.5).
+        return LGCCNativeTrackRadius(mat.layer.cornerRadius,
+                                     mat.bounds.size.width, mat.bounds.size.height);
     }
 
     if (!inModule) {
@@ -186,11 +190,13 @@ static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
 
     UIView *module = ccModuleAncestor(mat);
     if (!module || ccHasMaterialAncestor(mat)) return -1.0;
-    if (ccIsModuleCandidate(module)) return ccModuleCornerRadius(module);
+    if (fmax(w, h) < 100.0 && ccIsModuleCandidate(module))
+        return fmin(w, h) * 0.5;
 
-    // Expanded tiles such as Now Playing are wide cards, not pill shapes.
-    // Keep the system radius when present, otherwise use a conservative card radius.
+    // Large/expanded cards keep the stock background geometry. Do not force
+    // system containers to match the plugin's collapsed-card heuristic.
     CGFloat inheritedRadius = mat.layer.cornerRadius;
+    if (inheritedRadius <= 0.0) inheritedRadius = mat.superview.layer.cornerRadius;
     if (inheritedRadius > 0.0) return fmin(inheritedRadius, fmin(w, h) * 0.5);
     return fmin(38.0, fmin(w, h) * 0.16);
 }
@@ -657,7 +663,6 @@ static void ccScheduleFullscreenBackdropStyle(UIView *overlayRoot) {
 static void *kCCRoundOriginalRadiusKey = &kCCRoundOriginalRadiusKey;
 static void *kCCRoundOriginalCurveKey = &kCCRoundOriginalCurveKey;
 static void *kCCRoundOriginalMasksKey = &kCCRoundOriginalMasksKey;
-static void *kCCRoundDesiredRadiusKey = &kCCRoundDesiredRadiusKey;
 static NSHashTable<UIView *> *sCCRoundedViews;
 
 static NSHashTable<UIView *> *ccRoundedViews(void) {
@@ -688,8 +693,6 @@ static void ccRestoreRoundState(UIView *view) {
     NSNumber *masks = objc_getAssociatedObject(view, kCCRoundOriginalMasksKey);
     if (!radius || !curve || !masks) return;
 
-    objc_setAssociatedObject(view.layer, kCCRoundDesiredRadiusKey, nil,
-                             OBJC_ASSOCIATION_ASSIGN);
     view.layer.cornerRadius = radius.doubleValue;
     view.layer.cornerCurve = curve == [NSNull null] ? nil : curve;
     view.layer.masksToBounds = masks.boolValue;
@@ -717,8 +720,6 @@ static void lgRound(UIView *v, CGFloat r) {
     }
 
     ccRememberOriginalRoundState(v);
-    objc_setAssociatedObject(v.layer, kCCRoundDesiredRadiusKey, @(r),
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     if (fabs(v.layer.cornerRadius - r) > 0.5) v.layer.cornerRadius = r;
@@ -795,36 +796,21 @@ static void ccDumpSliderHierarchy(UIView *slider, NSString *reason) {
     LGLog(@"%@", out);
 }
 
-static void ccRoundMaterialsInSubtree(UIView *view, CGFloat radius,
-                                      BOOL eligible, NSUInteger depth) {
-    if (depth > 6) return;
-    for (UIView *sub in view.subviews) {
+static void ccRefreshSliderMaterials(UIView *view, NSUInteger depth) {
+    if (depth > 6 || ccHasSBElasticHierarchy(view)) return;
+    for (UIView *sub in [view.subviews copy]) {
         if (isExactClass(sub, @"MTMaterialView")) {
-            // The filled part may use a private animated mask. Forcing its
-            // material radius deformed the expanded slider into a pointed lens.
-            BOOL track = eligible && !ccIsSliderFillMaterial(sub);
-            ccApplyOrRestoreRound(sub, radius, track);
+            // Keep stock material + fill-mask geometry intact. The glass
+            // radius provider reads the native track radius, it never writes it.
             LGRefreshMaterialHost(sub);
-        } else {
-            ccRoundMaterialsInSubtree(sub, radius, eligible, depth + 1);
+        } else if (![sub isKindOfClass:LGLiveBackdropView.class]) {
+            ccRefreshSliderMaterials(sub, depth + 1);
         }
     }
 }
 
 static void roundSliderMaterialsImpl(UIView *slider) {
-    BOOL eligible = !ccHasSBElasticHierarchy(slider);
-
-    CGFloat radius = ccPillRadius(slider);
-    if (radius <= 0.0) return;
-    ccRoundMaterialsInSubtree(slider, radius, eligible, 0);
-
-    UIView *parent = slider.superview;
-    if (isExactClass(parent, @"CCUIContentModuleContentContainerView")) {
-        for (UIView *sibling in parent.subviews) {
-            if (sibling == slider || !isExactClass(sibling, @"MTMaterialView")) continue;
-            ccApplyOrRestoreRound(sibling, radius, eligible);
-        }
-    }
+    ccRefreshSliderMaterials(slider, 0);
 }
 
 static void roundSliderMaterials(UIView *slider) {
@@ -836,6 +822,8 @@ static void roundSliderMaterials(UIView *slider) {
 static void roundToggleFills(UIView *buttonModule) {
     UIView *module = ccModuleAncestor(buttonModule);
     BOOL eligible = module && ccIsModuleCandidate(module) &&
+                    fmax(module.bounds.size.width, module.bounds.size.height) < 100.0 &&
+                    module.layer.animationKeys.count == 0 && buttonModule.layer.animationKeys.count == 0 &&
                     !ccHasSBElasticHierarchy(buttonModule) &&
                     !ccHasSBElasticHierarchy(module);
     CGFloat r = eligible ? ccModuleCornerRadius(module) : 0.0;
@@ -862,20 +850,10 @@ static void ccDumpModuleHierarchy(UIView *module) {
     LGLog(@"%@", out);
 }
 
-static void roundModuleContainerImpl(UIView *module) {
-    if (!isExactClass(module, @"CCUIContentModuleContainerView")) return;
-    BOOL eligible = ccIsModuleCandidate(module) && !ccHasSBElasticHierarchy(module);
-    CGFloat r = eligible ? ccModuleCornerRadius(module) : 0.0;
-    ccApplyOrRestoreRound(module, r, eligible);
-    for (UIView *sub in module.subviews)
-        if (isExactClass(sub, @"CCUIContentModuleContentContainer") ||
-            isExactClass(sub, @"CCUIContentModuleContentContainerView"))
-            ccApplyOrRestoreRound(sub, r, eligible);
-}
-
 static void roundModuleContainer(UIView *module) {
     CFTimeInterval started = CACurrentMediaTime();
-    roundModuleContainerImpl(module);
+    // The system owns container radius/masks and its expansion animation.
+    // Only the injected glass itself needs plugin-specific geometry.
     ccDumpModuleHierarchy(module);
     ccProfileRecord(CCProfileModuleRound, started);
 }
@@ -1042,11 +1020,6 @@ static void ccRefreshContentContainerGlass(UIView *container) {
 
 %hook CALayer
 
-- (void)setCornerRadius:(CGFloat)radius {
-    NSNumber *desired = objc_getAssociatedObject(self, kCCRoundDesiredRadiusKey);
-    %orig(desired ? desired.doubleValue : radius);
-}
-
 - (void)setFilters:(NSArray *)filters {
     UIView *overlayRoot = nil;
     CGFloat incomingBlurRadius = -1.0;
@@ -1091,22 +1064,6 @@ static void ccRefreshContentContainerGlass(UIView *container) {
 - (void)addAnimation:(CAAnimation *)animation forKey:(NSString *)key {
     if (ccObjectHasBlurCap(self) && lgHostEnabled(@"ControlCenter")) {
         ccClampBlurAnimation(animation, ccFullscreenBlurRadius());
-    }
-    NSNumber *desired = objc_getAssociatedObject(self, kCCRoundDesiredRadiusKey);
-    NSString *keyPath = [animation respondsToSelector:@selector(keyPath)]
-        ? [(id)animation keyPath] : nil;
-    if (desired && [keyPath isEqualToString:@"cornerRadius"]) {
-        if ([animation isKindOfClass:CABasicAnimation.class]) {
-            CABasicAnimation *basic = (CABasicAnimation *)animation;
-            basic.fromValue = desired;
-            basic.toValue = desired;
-            basic.byValue = nil;
-        } else if ([animation isKindOfClass:CAKeyframeAnimation.class]) {
-            CAKeyframeAnimation *keyframe = (CAKeyframeAnimation *)animation;
-            NSMutableArray *values = [NSMutableArray arrayWithCapacity:keyframe.values.count];
-            for (__unused id value in keyframe.values) [values addObject:desired];
-            keyframe.values = values;
-        }
     }
     %orig(animation, key);
 }

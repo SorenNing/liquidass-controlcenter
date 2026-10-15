@@ -63,7 +63,7 @@
     for (id key in existingKeys) {
         if (![key isKindOfClass:NSString.class]) continue;
         if ([key isEqualToString:@"Global.Enabled"] ||
-            [key isEqualToString:@"ControlCenter.Enabled"]) continue;
+            [key isEqualToString:@"ControlCenter.Enabled"] || values[key] != nil) continue;
         [keysToRemove addObject:key];
     }
     CFPreferencesSetMultiple((__bridge CFDictionaryRef)values,

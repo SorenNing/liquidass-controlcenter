@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import "../Shared/LGHostRegistry.h"
+#import "../Shared/LGGeometryPolicy.h"
 #import "../Shared/LGLensRectState.h"
 #import "LGSymbolResolver.h"
 #import "../Shared/LGCoverSheetState.h"
@@ -1144,6 +1145,11 @@ static LGHostParams g_hostParams[kHostCount];
 static uint32_t g_darkAtoms[kHostCount];
 static bool         g_hostParamsInit = false;
 static os_unfair_lock g_hostParamsLock = OS_UNFAIR_LOCK_INIT;
+// Opt-in diagnostics only; do not alter normal pixel math or renderer ABI.
+static bool gLGStockOnlyDiagnostic = false;
+static uint64_t gLGTransitionTraceDeadline = 0;
+static unsigned gLGTransitionTraceLines = 0;
+static bool gLGTransitionTraceRequested = false;
 static float        g_fresnelGlareStrength = 0.5f;
 static float        g_coverSheetCornerRadiusPoints = 64.0f;
 
@@ -1247,6 +1253,18 @@ static void lgReloadHostPrefs(void) {
     NSNumber *debugLogging = prefs[@"Debug.Logging.Enabled"];
     gLGBackboardDebugLogging = [debugLogging isKindOfClass:NSNumber.class]
         ? debugLogging.boolValue : false;
+    id stockOnly = prefs[@"Debug.Renderer.StockOnly"];
+    __atomic_store_n(&gLGStockOnlyDiagnostic,
+        [stockOnly respondsToSelector:@selector(boolValue)] && [stockOnly boolValue], __ATOMIC_RELAXED);
+    id traceValue = prefs[@"Debug.TransitionTrace.Enabled"];
+    bool traceRequested = gLGBackboardDebugLogging &&
+        [traceValue respondsToSelector:@selector(boolValue)] && [traceValue boolValue];
+    if (traceRequested && !gLGTransitionTraceRequested) {
+        __atomic_store_n(&gLGTransitionTraceDeadline, lgMonotonicMilliseconds() + 25000, __ATOMIC_RELAXED);
+        __atomic_store_n(&gLGTransitionTraceLines, 0u, __ATOMIC_RELAXED);
+    }
+    if (!traceRequested) __atomic_store_n(&gLGTransitionTraceDeadline, 0, __ATOMIC_RELAXED);
+    gLGTransitionTraceRequested = traceRequested;
     NSNumber *fresnelStrength = prefs[@"Renderer.FresnelGlareStrength"];
     g_fresnelGlareStrength = [fresnelStrength isKindOfClass:NSNumber.class]
         ? fminf(1.0f, fmaxf(0.0f, fresnelStrength.floatValue)) : 0.5f;
@@ -1330,6 +1348,39 @@ static void lgStartPrefsObserver(void) {
         NULL, CFNotificationSuspensionBehaviorCoalesce);
 }
 
+static void lgTraceTransition(const char *phase, uint32_t atom, void *layer,
+                              float opacity, float scale, uint64_t sw, uint64_t sh,
+                              uint64_t dw, uint64_t dh, bool dark, bool normalized,
+                              NSUInteger format) {
+    uint64_t deadline = __atomic_load_n(&gLGTransitionTraceDeadline, __ATOMIC_RELAXED);
+    if (!deadline) return;
+    uint64_t now = lgMonotonicMilliseconds();
+    if (now > deadline) return;
+    struct Sample {
+        uint64_t time, sw, sh, dw, dh;
+        const char *phase;
+        bool dark, normalized;
+        float opacity, scale;
+    };
+    static thread_local std::unordered_map<uintptr_t, Sample> samples;
+    if (samples.size() >= 96 && samples.find((uintptr_t)layer) == samples.end()) return;
+    auto &last = samples[(uintptr_t)layer];
+    bool changed = last.phase != phase || last.dark != dark || last.normalized != normalized ||
+        last.sw != sw || last.sh != sh || last.dw != dw || last.dh != dh ||
+        fabs(last.opacity - opacity) > 0.01f || fabs(last.scale - scale) > 0.01f;
+    if (last.time && now - last.time < (changed ? 30u : 500u)) return;
+    last = { now, sw, sh, dw, dh, phase, dark, normalized, opacity, scale };
+    unsigned line = __atomic_fetch_add(&gLGTransitionTraceLines, 1u, __ATOMIC_RELAXED);
+    if (line >= 6000) return;
+    lglog("[CCTRANS] mono=%llu phase=%s atom=0x%x layer=%p opacity=%.5f scale=%.5f "
+          "src=%llux%llu dst=%llux%llu sx=%.5f sy=%.5f dark=%d normalized=%d fmt=%lu",
+          (unsigned long long)now, phase, atom, layer, opacity, scale,
+          (unsigned long long)sw, (unsigned long long)sh,
+          (unsigned long long)dw, (unsigned long long)dh,
+          sw ? (double)dw / sw : 0.0, sh ? (double)dh / sh : 0.0,
+          (int)dark, (int)normalized, (unsigned long)format);
+}
+
 static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
                                float opacity, void *surface, float scale,
                                bool flag, void *cm, void *shape, float *out)
@@ -1402,6 +1453,11 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         ? *(uint32_t *)((uint8_t *)filter + g_filterAtomOffset) : 0;
     bool darkTint = false;
     const LGHostParams *hp = lgHostParamsForAtom(ftype, &darkTint);
+    if (__atomic_load_n(&gLGStockOnlyDiagnostic, __ATOMIC_RELAXED)) {
+        lgTraceTransition("stock-only-diagnostic", ftype, layer, opacity, scale,
+            w, h, 0, 0, darkTint, false, 0);
+        return;
+    }
     float shortestF = fminf((float)w, (float)h);
 
     auto radiusIt = g_radiusRoutes.find(ftype);
@@ -1578,25 +1634,18 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         return;
     }
 
-    auto compatibleDimension = [](uint64_t destination, uint64_t source) {
-        return destination >= source
-            ? destination - source <= 64
-            : source - destination <= 8;
-    };
-    // Preserve the original symmetric-padding route. Add only the near-
-    // uniform downscale observed in CC transitions; unknown geometry falls back.
-    double sx = (double)destTex.width / (double)w;
-    double sy = (double)destTex.height / (double)h;
-    bool normalizedScale = !strcmp(hp->prefPrefix, "ControlCenter") &&
-        destTex.width > 0 && destTex.height > 0 && sx >= 0.85 && sy >= 0.85 &&
-        sx <= 1.0 && sy <= 1.0 && (sx < 1.0 || sy < 1.0) &&
-        fabs(sx - sy) / fmax(sx, sy) <= 0.01;
-    bool compatibleDimensions = destTex &&
-        (normalizedScale || (compatibleDimension(destTex.width, w) &&
-                             compatibleDimension(destTex.height, h)));
+    enum LGCCOutputMapping mapping = LGCCChooseOutputMapping(w, h,
+        destTex.width, destTex.height, !strcmp(hp->prefPrefix, "ControlCenter"));
+    bool normalizedScale = mapping == LGCCOutputNormalized;
+    bool compatibleDimensions = mapping != LGCCOutputStock;
     if (!cmdBuf || !destTex || destTex.device != device ||
         !compatibleDimensions ||
         !(destTex.usage & MTLTextureUsageRenderTarget)) {
+        const char *reason = !cmdBuf ? "stock-no-command-buffer" :
+            !destTex ? "stock-no-destination" : destTex.device != device ? "stock-device" :
+            !compatibleDimensions ? "stock-geometry" : "stock-usage";
+        lgTraceTransition(reason, ftype, layer, opacity, scale, w, h,
+            destTex.width, destTex.height, darkTint, normalizedScale, destTex.pixelFormat);
         static int sBadDestinationLogs = 0;
         if (__sync_fetch_and_add(&sBadDestinationLogs, 1) < 20) {
             lglog("ourCustomRender13: unusable CA destination atom=0x%x surf=%p tex=%p src=%llux%llu dst=%lux%lu usage=%lu; kept stock pass",
@@ -1657,6 +1706,8 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
     [enc setFragmentBytes:&lu length:sizeof(lu) atIndex:0];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [enc endEncoding];
+    lgTraceTransition("custom-encoded", ftype, layer, opacity, scale, w, h,
+        destTex.width, destTex.height, darkTint, normalizedScale, destTex.pixelFormat);
 
     uint64_t t_afterOurs = mach_absolute_time();
     R13TRACE("R13[%llu] after our compute dispatch", callN);

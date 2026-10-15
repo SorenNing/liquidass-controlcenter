@@ -41,4 +41,24 @@ assert 'static_assert(sizeof(LGUniforms) == 176' in shader
 entry=plistlib.loads((R/'layout/Library/PreferenceLoader/Preferences/liquidasscc.plist').read_bytes())['entry']
 assert entry['icon']=='icon.png'
 for suffix in ['','@2x','@3x']: assert (R/f'LiquidAssCCPrefs/Resources/icon{suffix}.png').is_file()
-print('PASS: observed transition geometry, padding fallback, subpixel coordinates, first-frame radius, zero-size retry, icon assets')
+# 0.2.6: native controls own their animation and fill geometry.
+assert '- (void)setCornerRadius:' not in cc
+assert 'basic.fromValue = desired' not in cc and 'kCCRoundDesiredRadiusKey' not in cc
+assert 'roundModuleContainerImpl' not in cc
+assert 'LGCCNativeTrackRadius(mat.layer.cornerRadius' in cc
+slider=cc[cc.index('static void ccRefreshSliderMaterials'):cc.index('static void roundSliderMaterials(UIView *slider)')]
+assert 'cornerRadius =' not in slider and 'ccApplyOrRestoreRound' not in slider
+assert 'LGCCChooseOutputMapping' in shader
+assert 'stock-only-diagnostic' in shader and 'custom-encoded' in shader
+assert '[CCTRANS]' in shader and '[CCVIEWTRANS]' in live
+# Replacement may fail after a previously successful attachment. It must clear state.
+creation=live[live.index('// The previous filter is not'):live.index('- (void)reapplyFilterForParameterReload {')]
+assert creation.index('_filterAttached = NO') < creation.index('filterWithType:')
+assert 'normalizedOutputScale' in shader
+prefs=plistlib.loads((R/'LiquidAssCCPrefs/Resources/Root.plist').read_bytes())
+rows={x['key']:x for x in prefs['items'] if 'key' in x}
+for key in ['Debug.Renderer.StockOnly','Debug.TransitionTrace.Enabled']:
+    assert rows[key]['default'] is False
+assert rows['ControlCenter.BezelWidth']['default']==15.5
+assert rows['ControlCenter.RefractionScale']['default']==1.8
+print('PASS source invariants: native track geometry, no radius animation locks, failure state reset, opt-in bounded trace, unchanged visual defaults')

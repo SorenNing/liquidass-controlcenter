@@ -17,6 +17,28 @@ static const void *kLGOriginalMaterialHiddenKey = &kLGOriginalMaterialHiddenKey;
 
 static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass);
 static BOOL sLGSyncingMaterialVisibility = NO;
+static BOOL sLGTransitionTraceRequested = NO;
+static uint64_t sLGTransitionTraceDeadline = 0;
+static NSUInteger sLGTransitionTraceLines = 0;
+
+static uint64_t LGTraceMilliseconds(void) {
+    struct timespec now = {};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
+    return (uint64_t)now.tv_sec * 1000ULL + now.tv_nsec / 1000000ULL;
+}
+
+static void LGReloadTransitionDiagnostics(void) {
+    id logging = LGGlassPreferenceValue(@"Debug.Logging.Enabled");
+    id tracing = LGGlassPreferenceValue(@"Debug.TransitionTrace.Enabled");
+    BOOL wanted = [logging respondsToSelector:@selector(boolValue)] && [logging boolValue] &&
+        [tracing respondsToSelector:@selector(boolValue)] && [tracing boolValue];
+    if (wanted && !sLGTransitionTraceRequested) {
+        sLGTransitionTraceDeadline = LGTraceMilliseconds() + 25000;
+        sLGTransitionTraceLines = 0;
+    }
+    if (!wanted) sLGTransitionTraceDeadline = 0;
+    sLGTransitionTraceRequested = wanted;
+}
 
 static NSDictionary<NSString *, id> *sLGGlassPreferences;
 
@@ -111,6 +133,7 @@ static BOOL LGIsSpringBoardBundle(void) {
 }
 
 static void LGReloadMotionHighlightPreferences(void) {
+    LGReloadTransitionDiagnostics();
     id enabled = LGGlassPreferenceValue(@"Specular.Motion.Enabled");
     id sensitivity = LGGlassPreferenceValue(@"Specular.Motion.Sensitivity");
     BOOL previousEnabled = sLGMotionEnabled;
@@ -174,6 +197,7 @@ static CGFloat LGScaleForSize(CGSize s) {
 
 @interface LGLiveBackdropView ()
 - (void)lgApplyFiltersImpl;
+- (void)lgTraceTransitionState;
 - (void)updateSpecular;
 - (void)applySpecularAngle:(CGFloat)angle;
 - (void)reapplyFilterForParameterReload;
@@ -335,6 +359,12 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
     BOOL             _parameterRefreshVariant;
     NSInteger        _lastRadiusStep;
     CGFloat          _appliedSpecularOpacity;
+    uint64_t         _traceLastTime;
+    NSString        *_traceLastType;
+    UIUserInterfaceStyle _traceLastWindowStyle;
+    CGFloat          _traceLastRadius;
+    CGFloat          _traceLastStockOpacity;
+    CGRect           _traceLastBounds;
 }
 
 - (NSString *)lgEffectiveFilterType {
@@ -592,16 +622,70 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
     _specularLayer.endPoint = CGPointMake(0.5 - dx, 0.5 - dy);
 }
 
+- (void)lgTraceTransitionState {
+    if (!sLGTransitionTraceDeadline || sLGTransitionTraceLines >= 6000) return;
+    uint64_t now = LGTraceMilliseconds();
+    if (now > sLGTransitionTraceDeadline) return;
+    UIView *mat = self.lgOriginalMaterial;
+    if (!mat) return;
+    NSString *wanted = [self lgEffectiveFilterType];
+    UIUserInterfaceStyle windowStyle = self.window.traitCollection.userInterfaceStyle;
+    BOOL changed = ![_traceLastType isEqualToString:wanted] || _traceLastWindowStyle != windowStyle ||
+        !CGRectEqualToRect(_traceLastBounds, self.bounds) ||
+        fabs(_traceLastRadius - self.layer.cornerRadius) > 0.01 ||
+        fabs(_traceLastStockOpacity - mat.layer.opacity) > 0.01;
+    if (_traceLastTime && now - _traceLastTime < (changed ? 30 : 500)) return;
+    _traceLastTime = now;
+    _traceLastType = wanted;
+    _traceLastWindowStyle = windowStyle;
+    _traceLastRadius = self.layer.cornerRadius;
+    _traceLastBounds = self.bounds;
+    _traceLastStockOpacity = mat.layer.opacity;
+    sLGTransitionTraceLines++;
+    NSString *existing = @"<none>";
+    @try {
+        id filter = self.layer.filters.firstObject;
+        id value = [filter valueForKey:@"type"];
+        if ([value isKindOfClass:NSString.class]) existing = value;
+    } @catch (__unused NSException *exception) {}
+    CALayer *stockPresented = mat.layer.presentationLayer;
+    CALayer *glassPresented = self.layer.presentationLayer;
+    LGLog(@"[CCVIEWTRANS] mono=%llu glass=%p layer=%p material=%p stockLayer=%p "
+          "viewStyle=%ld windowStyle=%ld existing=%@ wanted=%@ attached=%d "
+          "stockAlpha=%.4f stockModel=%.4f stockPresented=%.4f glassModel=%.4f glassPresented=%.4f "
+          "radius=%.3f stockRadius=%.3f shownRadius=%.3f stockShownRadius=%.3f "
+          "bounds=%@ stockBounds=%@ shownFrame=%@ stockShownFrame=%@ stockTransformIdentity=%d "
+          "stockAnimations=%@ parentAnimations=%@",
+          (unsigned long long)now, self, self.layer, mat, mat.layer,
+          (long)self.traitCollection.userInterfaceStyle, (long)windowStyle,
+          existing, wanted, _filterAttached, mat.alpha, mat.layer.opacity,
+          stockPresented ? stockPresented.opacity : -1.0,
+          self.layer.opacity, glassPresented ? glassPresented.opacity : -1.0,
+          self.layer.cornerRadius, mat.layer.cornerRadius,
+          glassPresented ? glassPresented.cornerRadius : -1.0,
+          stockPresented ? stockPresented.cornerRadius : -1.0,
+          NSStringFromCGRect(self.bounds), NSStringFromCGRect(mat.bounds),
+          NSStringFromCGRect(glassPresented ? glassPresented.frame : CGRectZero),
+          NSStringFromCGRect(stockPresented ? stockPresented.frame : CGRectZero),
+          CATransform3DIsIdentity(mat.layer.transform),
+          [mat.layer.animationKeys componentsJoinedByString:@","],
+          [mat.superview.layer.animationKeys componentsJoinedByString:@","]);
+}
+
 - (void)applyFilters {
     [self lgApplyFiltersImpl];
     if (self.lgOriginalMaterial)
         LGSyncMaterialVisibility(self.lgOriginalMaterial, self);
+    [self lgTraceTransitionState];
 }
 
 - (void)lgApplyFiltersImpl {
     CALayer *layer = self.layer;
     Class backdropCls = NSClassFromString(@"CABackdropLayer");
-    if (!backdropCls || ![layer isKindOfClass:backdropCls]) return;
+    if (!backdropCls || ![layer isKindOfClass:backdropCls]) {
+        _filterAttached = NO;
+        return;
+    }
 
     @try {
 
@@ -646,6 +730,9 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
                 return;
             }
         }
+        // The previous filter is not the requested type. Do not let a failed
+        // replacement masquerade as a successful current attachment.
+        _filterAttached = NO;
         if (!filterCls) { sblog("CAFilter class not found"); return; }
 
         id glassFilter = ((id (*)(Class, SEL, NSString *))objc_msgSend)(
@@ -666,6 +753,7 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
         [[NSNotificationCenter defaultCenter]
             postNotificationName:@"LGLiveBackdropViewFilterDidAttach" object:self];
     } @catch (NSException *e) {
+        _filterAttached = NO;
         sblog("applyFilters exception: %s", e.reason.UTF8String);
     }
 }
