@@ -1,10 +1,10 @@
 Package: com.minis.liquidasscc
 Name: Liquid (Gl)ass — 控制中心
-Version: 0.2.7-extract
+Version: 0.1
 Architecture: iphoneos-arm64e
 Replaces: com.minis.liquidglasscc
 Conflicts: com.minis.liquidglasscc
-Description: Extracted Control Center host and original LiquidAss renderer.
+Description: 控制中心玻璃效果
 Maintainer: dylv
 Author: dylv&Ning
 Section: Tweaks
