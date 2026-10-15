@@ -49,4 +49,5 @@ void LGRemoveGlassFromMaterial(UIView *materialView, const void *assocKey);
 
 BOOL LGMaterialHasGlass(UIView *materialView, const void *assocKey);
 BOOL LGOriginalMaterialWasHidden(UIView *materialView);
+BOOL LGGlassShouldHideOriginalMaterial(UIView *materialView, LGLiveBackdropView *glass);
 void LGRecordMaterialHiddenRequest(UIView *materialView, LGLiveBackdropView *glass, BOOL hidden);

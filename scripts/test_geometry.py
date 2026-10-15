@@ -41,13 +41,17 @@ assert 'static_assert(sizeof(LGUniforms) == 176' in shader
 entry=plistlib.loads((R/'layout/Library/PreferenceLoader/Preferences/liquidasscc.plist').read_bytes())['entry']
 assert entry['icon']=='icon.png'
 for suffix in ['','@2x','@3x']: assert (R/f'LiquidAssCCPrefs/Resources/icon{suffix}.png').is_file()
-# 0.2.6: native controls own their animation and fill geometry.
+# 0.2.6/0.2.7: native controls own their animation and fill geometry.
 assert '- (void)setCornerRadius:' not in cc
 assert 'basic.fromValue = desired' not in cc and 'kCCRoundDesiredRadiusKey' not in cc
 assert 'roundModuleContainerImpl' not in cc
 assert 'LGCCNativeTrackRadius(mat.layer.cornerRadius' in cc
 slider=cc[cc.index('static void ccRefreshSliderMaterials'):cc.index('static void roundSliderMaterials(UIView *slider)')]
 assert 'cornerRadius =' not in slider and 'ccApplyOrRestoreRound' not in slider
+assert 'kLGRadiusKey' not in live
+assert 'LGGeometryIsTransitioning' in live and 'LGGlassShouldHideOriginalMaterial' in live
+assert '80 * NSEC_PER_MSEC' in live
+assert 'LGGlassShouldHideOriginalMaterial(material, glass)' in kit
 assert 'LGCCChooseOutputMapping' in shader
 assert 'stock-only-diagnostic' in shader and 'custom-encoded' in shader
 assert '[CCTRANS]' in shader and '[CCVIEWTRANS]' in live

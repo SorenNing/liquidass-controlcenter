@@ -303,7 +303,7 @@ __attribute__((constructor)) static void lgGlassInitEnableObserver(void) {
     LGLiveBackdropView *glass = objc_getAssociatedObject(material, kGlassKey);
     LGRecordMaterialHiddenRequest(material, glass, hidden);
     if (!sLGCCRendererSafeMode && lgHostEnabled(@"ControlCenter") &&
-        glass && [glass lgFilterAttached]) hidden = YES;
+        LGGlassShouldHideOriginalMaterial(material, glass)) hidden = YES;
     %orig(hidden);
 }
 

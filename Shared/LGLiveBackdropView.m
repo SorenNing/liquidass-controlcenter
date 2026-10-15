@@ -11,9 +11,9 @@
 #import <stdatomic.h>
 
 static const void *kLGOutsetKey = &kLGOutsetKey;
-static const void *kLGRadiusKey = &kLGRadiusKey;
 static const void *kLGSpecularEnabledOverrideKey = &kLGSpecularEnabledOverrideKey;
 static const void *kLGOriginalMaterialHiddenKey = &kLGOriginalMaterialHiddenKey;
+static const void *kLGVisibilityRetryKey = &kLGVisibilityRetryKey;
 
 static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass);
 static BOOL sLGSyncingMaterialVisibility = NO;
@@ -785,14 +785,45 @@ static const CGFloat kLGGlassEdgeWidth = 1.0;
 
 #pragma mark - generic host injection
 
+static CGFloat LGFrameDifference(CGRect a, CGRect b) {
+    return fmax(fmax(fabs(a.origin.x-b.origin.x), fabs(a.origin.y-b.origin.y)),
+                fmax(fabs(a.size.width-b.size.width), fabs(a.size.height-b.size.height)));
+}
+
+static BOOL LGGeometryIsTransitioning(UIView *mat, LGLiveBackdropView *glass) {
+    CALayer *mp = mat.layer.presentationLayer;
+    CALayer *gp = glass.layer.presentationLayer;
+    if (!mp || !gp) return NO;
+    return LGFrameDifference(mp.frame, mat.layer.frame) > 1.0 ||
+           LGFrameDifference(gp.frame, glass.layer.frame) > 1.0 ||
+           fabs(mp.cornerRadius - mat.layer.cornerRadius) > 0.5 ||
+           fabs(gp.cornerRadius - glass.layer.cornerRadius) > 0.5;
+}
+
+BOOL LGGlassShouldHideOriginalMaterial(UIView *mat, LGLiveBackdropView *glass) {
+    return glass && [glass lgFilterAttached] && !LGGeometryIsTransitioning(mat, glass);
+}
+
 static void LGSyncMaterialVisibility(UIView *mat, LGLiveBackdropView *glass) {
     if (!mat || !glass) return;
     BOOL attached = [glass lgFilterAttached] && glass.superview == mat.superview;
+    BOOL transitioning = attached && !LGGlassShouldHideOriginalMaterial(mat, glass);
     NSNumber *original = objc_getAssociatedObject(mat, kLGOriginalMaterialHiddenKey);
-    // A local CAFilter object is not proof of renderer execution, but never
-    // replace a working stock material when even filter attachment failed.
-    glass.hidden = !attached || original.boolValue;
-    BOOL hidden = attached ? YES : original.boolValue;
+    // A sibling CABackdropLayer is not on the private MTMaterial animation
+    // track. During geometric transitions show the native material; once both
+    // model/presentation geometries settle, hand ownership back to glass.
+    glass.hidden = transitioning || !attached || original.boolValue;
+    BOOL hidden = attached && !transitioning ? YES : original.boolValue;
+    if (transitioning && ![objc_getAssociatedObject(glass, kLGVisibilityRetryKey) boolValue]) {
+        objc_setAssociatedObject(glass, kLGVisibilityRetryKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        __weak UIView *weakMaterial = mat;
+        __weak LGLiveBackdropView *weakGlass = glass;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 80 * NSEC_PER_MSEC),
+                       dispatch_get_main_queue(), ^{
+            objc_setAssociatedObject(weakGlass, kLGVisibilityRetryKey, nil, OBJC_ASSOCIATION_ASSIGN);
+            if (weakMaterial && weakGlass) LGSyncMaterialVisibility(weakMaterial, weakGlass);
+        });
+    }
     if (mat.hidden != hidden) {
         BOOL previous = sLGSyncingMaterialVisibility;
         sLGSyncingMaterialVisibility = YES;
@@ -847,7 +878,6 @@ void LGInjectGlassIntoMaterialGroupType(UIView *mat, const void *assocKey,
 
     objc_setAssociatedObject(glass, kLGOutsetKey, [NSValue valueWithUIEdgeInsets:outset],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(glass, kLGRadiusKey, @(cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [glass applyFilters];
     LGSyncMaterialVisibility(mat, glass);
 }
@@ -859,9 +889,8 @@ void LGResyncGlassGeometry(UIView *mat, const void *assocKey) {
     LGLiveBackdropView *glass = objc_getAssociatedObject(mat, assocKey);
     if (!glass) return;
     NSValue *ov  = objc_getAssociatedObject(glass, kLGOutsetKey);
-    NSNumber *rv = objc_getAssociatedObject(glass, kLGRadiusKey);
     LGSyncGlassGeometry(mat, assocKey, ov ? ov.UIEdgeInsetsValue : UIEdgeInsetsZero,
-                        rv ? rv.doubleValue : -1.0);
+                        -1.0);
 }
 
 static void LGSyncGlassGeometry(UIView *mat, const void *assocKey,
