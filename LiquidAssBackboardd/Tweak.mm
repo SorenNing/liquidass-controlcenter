@@ -298,8 +298,12 @@ typedef struct {
     float       dispersionStrength;
     float       fresnelGlareStrength;
     float       borderWidthPixels;
+    float       lightBackdropProtection;
     simd_float4 tintColor;
 } LGUniforms;
+static_assert(offsetof(LGUniforms, lightBackdropProtection) == 152, "protection uniform offset changed");
+static_assert(offsetof(LGUniforms, tintColor) == 160, "tint uniform offset changed");
+static_assert(sizeof(LGUniforms) == 176, "Metal/C++ uniform layout changed");
 
 typedef void (*Render13Fn)(void*,
                            void*,
@@ -454,8 +458,22 @@ struct Uniforms {
     float  dispersionStrength;
     float  fresnelGlareStrength;
     float  borderWidthPixels;
+    float  lightBackdropProtection;
     float4 tintColor;
 };
+
+float3 protectBrightBackdrop(float3 rgb, float strength, float edgeBoost)
+{
+    float s = clamp(strength, 0.0, 1.0);
+    if (s <= 0.001) return rgb;
+    float luminance = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+    float bright = smoothstep(0.58, 0.96, luminance);
+    float amount = s * (0.35 + 0.65 * bright);
+    float3 shade = float3(0.035, 0.040, 0.050);
+    float3 protectedRgb = mix(rgb, shade, amount);
+    // A subtle outline-weighted darkening makes white controls separate from white wallpaper.
+    return mix(protectedRgb, shade, clamp(edgeBoost * s * 0.45, 0.0, 0.28));
+}
 
 float quartzGlassEdgeProfile(float distanceFromEdge,
                              float refractionHeight) {
@@ -771,6 +789,7 @@ float4 liquidGlassPixel(texture2d<float, access::sample> src,
     if ((R < shortest * 0.45 || subShape) && distFromSide >= bezel) {
         float4 flat = src.sample(s, captureUV);
         flat.rgb = mix(flat.rgb, u.tintColor.rgb, u.tintColor.a);
+        flat.rgb = protectBrightBackdrop(flat.rgb, u.lightBackdropProtection, 0.0);
         return flat;
     }
 
@@ -859,6 +878,9 @@ float4 liquidGlassPixel(texture2d<float, access::sample> src,
     }
 
     float3 outRGB = mix(bg.rgb, u.tintColor.rgb, u.tintColor.a);
+    float edgeContrastWeight = bezel > 0.001
+        ? clamp(1.0 - distFromSide / bezel, 0.0, 1.0) : 0.0;
+    outRGB = protectBrightBackdrop(outRGB, u.lightBackdropProtection, edgeContrastWeight);
     float highlight = quartzGlassHighlight(distFromSide, bezel, dir,
                                            u.fresnelGlareStrength,
                                            -0.78539816339) *
@@ -1104,6 +1126,7 @@ typedef struct {
     float       dispersionStrength;
     float       tintR, tintG, tintB, tintStrength;
     float       darkTintR, darkTintG, darkTintB, darkTintStrength;
+    float       lightBackdropProtection;
 } LGHostParams;
 
 static const LGHostParams kHostDefaults[] = {
@@ -1237,9 +1260,15 @@ static void lgReloadHostPrefs(void) {
         g_hostParams[i].atom = keepAtom;
         g_darkAtoms[i] = keepDarkAtom;
         if (i > 0) { lgApplyHistoricalTintDefault(i, &g_hostParams[i], false); lgApplyHistoricalTintDefault(i, &g_hostParams[i], true); }
+        if (i == LGHostIdentifierControlCenter) g_hostParams[i].lightBackdropProtection = 0.30f;
         if (!prefs) continue;
         NSString *p = [NSString stringWithUTF8String:kHostDefaults[i].prefPrefix];
         NSNumber *v;
+        if (i == LGHostIdentifierControlCenter) {
+            NSNumber *protection = prefs[@"ControlCenter.LightBackdropProtection"];
+            if ([protection isKindOfClass:NSNumber.class])
+                g_hostParams[i].lightBackdropProtection = fminf(1.0f, fmaxf(0.0f, protection.floatValue));
+        }
         #define LG_OVR(field, key) \
             if ((v = prefs[[p stringByAppendingString:@"." key]]) && \
                 [v isKindOfClass:[NSNumber class]]) { g_hostParams[i].field = v.floatValue; overrides++; }
@@ -1388,6 +1417,7 @@ static void ourCustomRender13(void *self, void *filter, void *layer, void *ctx,
         ? lgCurrentFresnelGlareStrength() : 0.0f;
     lu.tintColor          = darkTint ? simd_make_float4(hp->darkTintR, hp->darkTintG, hp->darkTintB, hp->darkTintStrength)
                                   : simd_make_float4(hp->tintR, hp->tintG, hp->tintB, hp->tintStrength);
+    lu.lightBackdropProtection = darkTint ? 0.0f : hp->lightBackdropProtection;
 
     if (!strcmp(hp->prefPrefix, "Keyboard")) {
         static int keyboardGeometryLogs = 0;

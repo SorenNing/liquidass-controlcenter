@@ -184,7 +184,7 @@ static NSHashTable<UIView *> *ccOverlayRoots(void) {
 }
 
 static CGFloat ccFullscreenBlurRadius(void) {
-    return fmax(0.0, LG_prefFloat(@"ControlCenter.FullscreenBackdropBlurRadius", 6.0));
+    return fmax(0.0, LG_prefFloat(@"ControlCenter.FullscreenBackdropBlurRadius", 8.0));
 }
 
 static UIColor *ccColorFromRGBAHex(NSString *hex, NSString *fallback) {
@@ -216,7 +216,7 @@ static UIColor *ccColorFromRGBAHex(NSString *hex, NSString *fallback) {
 }
 
 static UIColor *ccFullscreenDimColor(void) {
-    NSString *fallback = @"#00000040";
+    NSString *fallback = @"#00000033";
     return ccColorFromRGBAHex(LG_prefString(@"ControlCenter.FullscreenBackdropDimColor", fallback), fallback);
 }
 
