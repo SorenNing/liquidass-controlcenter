@@ -350,7 +350,21 @@
 			<key>label</key>
 			<string>维护</string>
 			<key>footerText</key>
-			<string>恢复默认不清理故障保护状态，并保留两个启用开关。</string>
+			<string>恢复默认不清理故障保护状态，并保留两个启用开关。调试日志默认关闭。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>defaults</key>
+			<string>com.minis.liquidasscc</string>
+			<key>key</key>
+			<string>Debug.Logging.Enabled</string>
+			<key>default</key>
+			<false/>
+			<key>label</key>
+			<string>调试日志</string>
+			<key>PostNotification</key>
+			<string>com.minis.liquidasscc/Reload</string>
 		</dict>
 		<dict>
 			<key>cell</key>

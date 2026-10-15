@@ -811,6 +811,25 @@ static void roundToggleFills(UIView *buttonModule) {
         if (isExactClass(child, @"UIView")) ccApplyOrRestoreRound(child, r, eligible);
 }
 
+static void ccDumpModuleHierarchy(UIView *module) {
+    if (!LGDebugLoggingEnabled() || !module.window) return;
+    static void *kCCModuleDumpKey = &kCCModuleDumpKey;
+    NSMutableString *signature = [NSMutableString stringWithFormat:@"%.0fx%.0f|",
+        CGRectGetWidth(module.bounds), CGRectGetHeight(module.bounds)];
+    for (UIView *child in module.subviews)
+        [signature appendFormat:@"%@(%lu)", NSStringFromClass(child.class),
+                                (unsigned long)child.subviews.count];
+    NSString *previous = objc_getAssociatedObject(module, kCCModuleDumpKey);
+    if ([previous isEqualToString:signature]) return;
+    objc_setAssociatedObject(module, kCCModuleDumpKey, signature, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    NSMutableString *out = [NSMutableString stringWithFormat:
+        @"[CCMODULE] class=%@ frame=%@ candidate=%d",
+        NSStringFromClass(module.class), NSStringFromCGRect(module.frame),
+        ccIsModuleCandidate(module)];
+    ccAppendSliderTree(out, module, 1);
+    LGLog(@"%@", out);
+}
+
 static void roundModuleContainerImpl(UIView *module) {
     if (!isExactClass(module, @"CCUIContentModuleContainerView")) return;
     BOOL eligible = ccIsModuleCandidate(module) && !ccHasSBElasticHierarchy(module);
@@ -825,6 +844,7 @@ static void roundModuleContainerImpl(UIView *module) {
 static void roundModuleContainer(UIView *module) {
     CFTimeInterval started = CACurrentMediaTime();
     roundModuleContainerImpl(module);
+    ccDumpModuleHierarchy(module);
     ccProfileRecord(CCProfileModuleRound, started);
 }
 
