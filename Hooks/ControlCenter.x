@@ -133,6 +133,10 @@ static BOOL ccIsSliderFillMaterial(UIView *mat) {
 static CGFloat ccGlassRadiusForMaterial(UIView *mat) {
     if (ccHasSBElasticHierarchy(mat)) return -1.0;
     if (!isExactClass(mat, @"MTMaterialView")) return -1.0;
+    // The Now Playing hierarchy has a second 356x108 material inside
+    // MediaControlsMaterialView plus the real 170x170 card material. The
+    // inner strip masks the card's refraction, so keep the outer card only.
+    if (hasAncestorOfClassName(mat, @"MediaControlsMaterialView")) return -1.0;
     BOOL inModule = hasAncestorOfClassName(mat, @"CCUIContentModuleContainerView");
 
     if (ccIsInsideSlider(mat)) {
