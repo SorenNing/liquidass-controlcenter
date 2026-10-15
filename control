@@ -1,5 +1,5 @@
 Package: com.minis.liquidasscc
-Name: 控制中心玻璃效果
+Name: Liquid (Gl)ass — 控制中心
 Version: 0.1
 Architecture: iphoneos-arm64e
 Replaces: com.minis.liquidglasscc
